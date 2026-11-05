@@ -9,10 +9,20 @@ extends Node3D
 @onready var camera := $Camera as Camera3D
 
 # Zoom settings
-@export var max_zoom := 10.0
-@export var min_zoom := 1.5
+@export var max_zoom := 20.0
+@export var min_zoom := 0.0 # low enough to reach first person by zooming in (see first_person_distance)
 @export var scroll_zoom_speed := 5.0
-var zoom: float = 3.0
+var zoom: float = 6.0
+
+# When the spring arm is pushed in by an obstacle (trees), the camera HOLDS that closer distance
+# instead of springing back out the instant the obstacle is gone -- otherwise walking through a
+# forest makes it bounce in and out. It only eases back out after the view has stayed clear for
+# zoom_recover_delay seconds (set it huge to never recover), or at once when you zoom out yourself.
+@export var zoom_recover_delay := 4.0
+@export var zoom_recover_speed := 2.0 # m/s while easing back out
+var _held_length := INF
+var _clear_time := 0.0
+var _last_zoom := 6.0
 
 # Viewing settings
 @export var springarm_enabled := true
@@ -24,12 +34,62 @@ var zoom: float = 3.0
 # Keyboard orbit: arrow keys (camera_left/right/forward/back actions), degrees per second
 @export var key_rotate_speed := 90.0
 
-# Browsers never send InputEventPanGesture/MagnifyGesture, so on web a trackpad's two-finger
-# swipe arrives as mouse-wheel button events (which the zoom_in/zoom_out actions used to grab).
-# On web: swipe = orbit, pinch (browser sends it as Ctrl+wheel) = zoom, +/- keys still zoom.
-@export var web_wheel_rotates := true
-@export var wheel_rotate_sensitivity := 0.7  # degrees per unit of wheel 'factor' -- tune on web
+# Mouse drag orbit, degrees per pixel. Right / middle button always orbits. Left button orbits only when
+# the press isn't doing something else: gathering/building (player is working), build mode, or a selected
+# citizen waiting for an order. So left-dragging on a tree you are in reach of still chops it.
+@export var drag_sensitivity := 0.25
+enum DragState { NONE, PENDING, ROTATING, BLOCKED }
+var _drag_state := DragState.NONE
+
+# Anti-occlusion. Both the pivot (follow_speed) and the camera (CAMERA_FOLLOW) trail the player while it
+# moves, so in a tight space (short spring arm) a running player catches up with the camera and fills the
+# screen. 1) Lead the pivot by velocity * total lag so the trailing cancels out. 2) Hard floor: the camera
+# is never allowed closer than min_camera_distance to the player's head.
+const CAMERA_FOLLOW := 10.0
+@export var lag_compensation := 1.0 # 0 = off, 1 = cancel the follow lag exactly
+# The lead only matters when the camera is close (tight spaces). Full strength at/below lead_full_distance,
+# fading to nothing at lead_off_distance, so a far-out camera isn't jerked around by velocity changes.
+@export var lead_full_distance := 3.0
+@export var lead_off_distance := 6.0
+@export var min_camera_distance := 1.5
+@export var head_height := 1.0 # player's head above target origin, for the distance floor
+
+# First person. The camera never gets closer than first_person_distance in third person: if the arm
+# length (scroll zoom OR pushed in by trees/walls) drops below it, the camera cuts to the player's eyes
+# and the player's body stops being drawn (it still casts a shadow). It goes back to third person once
+# the arm is longer than first_person_distance + first_person_hysteresis. Done by distance, not by
+# hiding the body when it happens to overlap the screen, so it keeps working with bigger models.
+@export var first_person_distance := 1.5
+@export var first_person_hysteresis := 0.5
+@export var eye_height := 0.6 # eyes above the target origin
+## The player's visual (path relative to the target). Hidden in first person.
+@export var player_visual_path := NodePath("MeshInstance3D")
+## Seconds the camera takes to glide between third person and the eyes.
+@export var first_person_transition := 0.3
+var _first_person := false
+var _fp_blend := 0.0 # 0 = third person, 1 = fully first person
+var _visual_hidden := false
+var _tp_pos := Vector3.ZERO # smoothed third-person camera position (state for the lerp)
+var _tp_pos_valid := false
+
+# Browsers never send InputEventPanGesture/MagnifyGesture, so on web both the mouse wheel and a trackpad's
+# two-finger swipe arrive as mouse-wheel button events carrying a 'factor'. Dragging orbits now, so on web:
+# scroll up/down = zoom, scroll sideways = orbit, pinch (browser sends it as Ctrl+wheel) = zoom, +/- keys zoom.
+# (Off = web uses the zoom_in / zoom_out actions like desktop: one fixed step per wheel event.)
+@export var web_wheel_handling := true
+@export var wheel_zoom_speed := 0.5  # metres per unit of wheel 'factor' -- tune on web
+@export var wheel_rotate_sensitivity := 0.7  # degrees per unit of wheel 'factor' (sideways scroll) -- tune on web
 @export var pinch_zoom_speed := 0.5
+
+# Shift lock (toggle with the shift_lock action, L by default): the mouse is captured and simply turns the camera,
+# and the camera sits slightly over the player's shoulder. Clicks then act at the screen centre (crosshair),
+# see Globals.aim_position(). Press the key again (or Esc in a browser) to get the cursor back.
+@export_group("Shift lock")
+@export var shift_lock_sensitivity := 0.15 # degrees per pixel of mouse movement
+@export var shift_lock_shoulder := 0.7 # metres the camera slides to the right while locked
+@export var crosshair: Control
+var shift_locked := false
+@export_group("")
 
 # Prevent hitting exact 0.0° and -90.0° singularities
 @export_range(-89.9, 89.9) var max_tilt_limit := 44.9
@@ -55,10 +115,31 @@ func _physics_process(delta: float) -> void:
 	if not target:
 		return
 		
-	# Smoothly follow the target's location
-	global_position = global_position.lerp(target.global_position, follow_speed * delta)
+	# Smoothly follow the target's location, leading it by its horizontal velocity so the rig doesn't
+	# trail behind a running player (see lag_compensation)
+	var goal := target.global_position
+	var vel = target.get("velocity")
+	if vel is Vector3:
+		var lag := 1.0 / follow_speed + 1.0 / CAMERA_FOLLOW
+		# Fade the lead out as the camera gets further from the player (uses the arm's actual length,
+		# so it also applies when trees push the camera in)
+		var closeness := 1.0 - smoothstep(lead_full_distance, lead_off_distance, spring_arm.spring_length)
+		# Only the part of the velocity along the view direction: that is what changes the camera's
+		# distance to the player (zoom in/out). Sideways motion is left alone, otherwise the view
+		# would slide left/right of the player and feel confusing.
+		var view_forward := -camera.global_basis.z
+		view_forward.y = 0.0
+		if view_forward.length_squared() > 0.0001:
+			view_forward = view_forward.normalized()
+			var forward_speed := Vector3(vel.x, 0.0, vel.z).dot(view_forward)
+			goal += view_forward * forward_speed * lag * lag_compensation * closeness
+	global_position = global_position.lerp(goal, follow_speed * delta)
 
 func _process(delta: float) -> void:
+	# A browser gives the mouse back on Esc without telling us: follow it
+	if shift_locked and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		set_shift_lock(false)
+	camera.h_offset = lerpf(camera.h_offset, shift_lock_shoulder if shift_locked else 0.0, minf(delta * 10.0, 1.0))
 	# Lerp pure script variables using lerp_angle (NEVER read rotation_degrees!)
 	var lerp_weight = delta * 12.0
 	
@@ -69,17 +150,91 @@ func _process(delta: float) -> void:
 	rotation_degrees = current_rotation
 	
 	# Handle SpringArm and Camera Zooming
-	spring_arm.spring_length = zoom
+	_update_spring_length(delta)
 	
 	# Separate Camera smooth positioning relative to SpringArm Marker
-	camera.global_position = camera.global_position.lerp(copy_target.global_position, delta * 15.0)
+	_update_first_person()
+	_fp_blend = move_toward(_fp_blend, 1.0 if _first_person else 0.0, delta / maxf(first_person_transition, 0.01))
 	camera.global_rotation = copy_target.global_rotation
+	if not _tp_pos_valid:
+		_tp_pos = camera.global_position
+		_tp_pos_valid = true
+	_tp_pos = _tp_pos.lerp(copy_target.global_position, delta * CAMERA_FOLLOW)
+	_tp_pos = _clear_of_player(_tp_pos)
+	var cam_pos := _tp_pos
+	if _fp_blend > 0.0 and target != null:
+		# Glide between the third-person spot and the eyes instead of cutting
+		cam_pos = _tp_pos.lerp(target.global_position + Vector3.UP * eye_height, smoothstep(0.0, 1.0, _fp_blend))
+	camera.global_position = cam_pos
+	_set_player_visual_hidden(_fp_blend > 0.85)
 	
 	handle_input(delta)
 
+func _update_spring_length(delta: float) -> void:
+	# The arm only updates in physics, so its hit length belongs to the length applied LAST frame --
+	# compare against that, not the new zoom, or zooming out always looks like an obstruction.
+	var applied_last := spring_arm.spring_length
+	var hit := spring_arm.get_hit_length()
+	if zoom > _last_zoom + 0.001:
+		# Zooming out on purpose cancels the hold
+		_held_length = INF
+		_clear_time = 0.0
+	elif hit < applied_last - 0.05:
+		# Something is in the way: pull in to it and stay there
+		_held_length = hit
+		_clear_time = 0.0
+	else:
+		_clear_time += delta
+		if _held_length < zoom and _clear_time > zoom_recover_delay:
+			_held_length += zoom_recover_speed * delta
+			if _held_length >= zoom:
+				_held_length = INF
+	_last_zoom = zoom
+	spring_arm.spring_length = minf(zoom, _held_length)
+
+# Switch between third and first person based on the arm's current length (with hysteresis)
+func _update_first_person() -> void:
+	var dist := spring_arm.spring_length
+	var want := _first_person
+	if not _first_person and dist < first_person_distance:
+		want = true
+	elif _first_person and dist > first_person_distance + first_person_hysteresis:
+		want = false
+	if want != _first_person:
+		_first_person = want
+
+func _set_player_visual_hidden(hidden: bool) -> void:
+	if target == null or hidden == _visual_hidden:
+		return
+	_visual_hidden = hidden
+	var node := target.get_node_or_null(player_visual_path)
+	if node is GeometryInstance3D:
+		# Keep the shadow so the player still casts one while you look out of their eyes
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if hidden else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	elif node is Node3D:
+		node.visible = not hidden
+
+func _exit_tree() -> void:
+	if _visual_hidden:
+		_set_player_visual_hidden(false)
+
+# Push a camera position out along the player->camera line if it is closer than min_camera_distance
+func _clear_of_player(pos: Vector3) -> Vector3:
+	if target == null or min_camera_distance <= 0.0:
+		return pos
+	var head := target.global_position + Vector3.UP * head_height
+	var offset := pos - head
+	if offset.length() >= min_camera_distance:
+		return pos
+	# Degenerate (camera on the head): use where the arm wants the camera to be
+	var dir := offset.normalized() if offset.length() > 0.01 else (copy_target.global_position - head).normalized()
+	if dir == Vector3.ZERO:
+		dir = global_basis.z
+	return head + dir * min_camera_distance
+
 func handle_input(_delta: float):
 	# CAMERA ZOOMING (Mouse Wheel)
-	if not _wheel_rotates():
+	if not _web_wheel():
 		if Input.is_action_just_pressed("zoom_in"):
 			zoom = max(min_zoom, zoom - scroll_zoom_speed)
 		if Input.is_action_just_pressed("zoom_out"):
@@ -103,35 +258,81 @@ func handle_input(_delta: float):
 		camera_rotation.x += pitch_axis * key_rotate_speed * _delta
 		_clamp_pitch()
 
-func _wheel_rotates() -> bool:
-	return web_wheel_rotates and OS.has_feature("web")
+func _web_wheel() -> bool:
+	return web_wheel_handling and OS.has_feature("web")
 
 func _clamp_pitch() -> void:
 	if view_angle_restricted:
 		camera_rotation.x = clamp(camera_rotation.x, min_tilt_limit, max_tilt_limit)
 
+# Click-and-drag orbit. Runs on UNHANDLED input so UI clicks never start a drag. Whether a left press is
+# really a gather/build click is only known once the player has seen it, so the decision is deferred to the
+# first mouse motion (the press has been fully dispatched by then, whatever the node order).
+func set_shift_lock(on: bool) -> void:
+	shift_locked = on
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+	if crosshair != null:
+		crosshair.visible = on
+	_drag_state = DragState.NONE
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("shift_lock") and not event.is_echo():
+		set_shift_lock(not shift_locked)
+		return
+	if event is InputEventMouseButton and event.pressed:
+		match event.button_index:
+			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
+				_drag_state = DragState.ROTATING
+			MOUSE_BUTTON_LEFT:
+				_drag_state = DragState.PENDING
+	elif event is InputEventMouseMotion and _drag_state != DragState.NONE and not shift_locked:
+		if _drag_state == DragState.PENDING:
+			_drag_state = DragState.ROTATING if _left_drag_allowed() else DragState.BLOCKED
+		if _drag_state == DragState.ROTATING:
+			camera_rotation.y -= event.relative.x * drag_sensitivity
+			camera_rotation.x -= event.relative.y * drag_sensitivity
+			_clamp_pitch()
+
+func _left_drag_allowed() -> bool:
+	var player = Globals.player
+	if player != null and player.has_method("is_working") and player.is_working():
+		return false # holding on a tree / construction site
+	var builder = Globals.builder
+	if builder != null and builder.interact_mode:
+		return false # build mode: left click places things
+	var selector = get_tree().get_first_node_in_group("citizen_selector")
+	if selector != null and selector.selected_citizen != null:
+		return false # left click orders the selected citizen
+	return true
+
 func _input(event):
+	# Shift lock: moving the mouse turns the camera (the cursor is captured)
+	if shift_locked and event is InputEventMouseMotion:
+		camera_rotation.y -= event.relative.x * shift_lock_sensitivity
+		camera_rotation.x -= event.relative.y * shift_lock_sensitivity
+		_clamp_pitch()
+
+	# Any drag ends when its button is released (even over UI)
+	if event is InputEventMouseButton and not event.pressed \
+			and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE]:
+		_drag_state = DragState.NONE
+	
 	# Trackpad gesture support
 	if event is InputEventPanGesture:
 		camera_rotation.y -= event.delta.x * mouse_sensitivity
 		camera_rotation.x -= event.delta.y * mouse_sensitivity
 	
-	# Web trackpad: two-finger swipe = wheel events. Ctrl+wheel = pinch.
-	elif event is InputEventMouseButton and event.pressed and _wheel_rotates() \
+	# Web: mouse wheel / trackpad swipe = wheel events. Up/down zooms, sideways orbits, Ctrl+wheel = pinch.
+	elif event is InputEventMouseButton and event.pressed and _web_wheel() \
 			and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT]:
 		var amount: float = clampf(event.factor, 0.0, 10.0)
-		if event.ctrl_pressed or event.meta_pressed:
-			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				zoom = clamp(zoom - amount * pinch_zoom_speed, min_zoom, max_zoom)
-			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				zoom = clamp(zoom + amount * pinch_zoom_speed, min_zoom, max_zoom)
-		else:
-			var step := amount * wheel_rotate_sensitivity
-			match event.button_index:
-				MOUSE_BUTTON_WHEEL_UP: camera_rotation.x += step
-				MOUSE_BUTTON_WHEEL_DOWN: camera_rotation.x -= step
-				MOUSE_BUTTON_WHEEL_LEFT: camera_rotation.y -= step
-				MOUSE_BUTTON_WHEEL_RIGHT: camera_rotation.y += step
+		var zoom_step := amount * (pinch_zoom_speed if (event.ctrl_pressed or event.meta_pressed) else wheel_zoom_speed)
+		var orbit_step := amount * wheel_rotate_sensitivity
+		match event.button_index:
+			MOUSE_BUTTON_WHEEL_UP: zoom = clamp(zoom - zoom_step, min_zoom, max_zoom)
+			MOUSE_BUTTON_WHEEL_DOWN: zoom = clamp(zoom + zoom_step, min_zoom, max_zoom)
+			MOUSE_BUTTON_WHEEL_LEFT: camera_rotation.y -= orbit_step
+			MOUSE_BUTTON_WHEEL_RIGHT: camera_rotation.y += orbit_step
 		get_viewport().set_input_as_handled()
 
 	elif event is InputEventMagnifyGesture:

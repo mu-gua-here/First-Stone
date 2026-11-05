@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://cknfqr1sh5grf"]
+
+[ext_resource type="Script" uid="uid://inu8csrpeqlf" path="res://scripts/net_player.gd" id="1_netplayer"]
+[ext_resource type="PackedScene" path="res://scenes/nameplate.tscn" id="2_nameplate"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_7d2os"]
+
+[sub_resource type="ORMMaterial3D" id="ORMMaterial3D_remote"]
+albedo_color = Color(1, 0.55, 0.2, 1)
+backlight_enabled = true
+backlight = Color(1, 1, 1, 1)
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_remote"]
+material = SubResource("ORMMaterial3D_remote")
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_net"]
+properties/0/path = NodePath(".:net_position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:player_name")
+properties/1/spawn = true
+properties/1/replication_mode = 2
+properties/2/path = NodePath(".:net_health")
+properties/2/spawn = true
+properties/2/replication_mode = 2
+properties/3/path = NodePath(".:net_energy")
+properties/3/spawn = true
+properties/3/replication_mode = 2
+properties/4/path = NodePath(".:player_color")
+properties/4/spawn = true
+properties/4/replication_mode = 2
+
+[node name="NetPlayer" type="CharacterBody3D" unique_id=1705756060 node_paths=PackedStringArray("nameplate", "body_mesh")]
+collision_layer = 0
+collision_mask = 0
+script = ExtResource("1_netplayer")
+nameplate = NodePath("Nameplate")
+body_mesh = NodePath("MeshInstance3D")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1049934997]
+shape = SubResource("CapsuleShape3D_7d2os")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1043275215]
+mesh = SubResource("CapsuleMesh_remote")
+
+[node name="Nameplate" parent="." unique_id=1360053369 instance=ExtResource("2_nameplate")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.55, 0)
+
+[node name="Sync" type="MultiplayerSynchronizer" parent="." unique_id=2041046876]
+replication_interval = 0.05
+replication_config = SubResource("SceneReplicationConfig_net")

@@ -8,6 +8,20 @@ extends Node3D
 var player: CharacterBody3D = null
 var builder: Node = null
 
+## Multiplayer (set by Network in its _ready). The dedicated server runs the world's simulation -- the Builder and
+## every citizen's AI. Clients get their citizens as puppets replicated from the server.
+var hosting_world := false
+var online_client := false
+var network: Node = null
+var world_sync: Node = null
+
+## Where the player is pointing on screen: the mouse, or the screen centre while shift lock has the mouse captured.
+func aim_position() -> Vector2:
+	var vp := get_viewport()
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		return vp.get_visible_rect().size * 0.5
+	return vp.get_mouse_position()
+
 func register_player(p: CharacterBody3D) -> void:
 	player = p
 

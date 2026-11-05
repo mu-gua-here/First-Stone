@@ -238,8 +238,10 @@ func _execute_assign_job(b, citizen, resolved_target = null) -> bool:
 		return false # no free slot at this specific building
 	if citizen.data.id in target.workers:
 		return true # already assigned here
+	# One job at a time: leave any previous workplace first
+	b.release_job(citizen.data.id)
 	target.workers.append(citizen.data.id)
-	citizen.data.job = structure.model.resource_path.get_file().get_basename()
+	citizen.set_job(structure.get_job_title(), structure.job_task, target.id)
 	return true
 
 ## See _execute_assign_job for the resolved_target / search-fallback split.
@@ -258,6 +260,8 @@ func _execute_assign_housing(b, citizen, resolved_target = null) -> bool:
 		return false # no free slot at this specific building
 	if citizen.data.id in target.residents:
 		return true # already housed here
+	# One home at a time: leave any previous house first
+	b.release_housing(citizen.data.id)
 	target.residents.append(citizen.data.id)
 	return true
 

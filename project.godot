@@ -10,16 +10,16 @@ config_version=5
 
 [application]
 
-config/name="Birth of Civilisation"
+config/name="First Stone"
 config/description="Manage your people well, and be careful not to anger them too much. Learn the dynamics of power as you balance the needs of your citizens with political support. At the same time, advance through different stages of civilisation, from primitive, to ancient, to medieval and finally the modern stage.
 
 How you lead your people is up to you."
 config/version="0.1.0"
 run/main_scene="uid://vgwrcfy1qawf"
 config/features=PackedStringArray("4.7", "Forward Plus")
-boot_splash/bg_color=Color(0.92549, 0.92549, 0.960784, 1)
-boot_splash/image="uid://c5fga5g3aw1ep"
-config/icon="uid://uehkpiwbfjih"
+boot_splash/bg_color=Color(0, 0, 0, 1)
+boot_splash/image="uid://d37ilijy45731"
+config/icon="uid://nr1cd8b0cj07"
 
 [audio]
 
@@ -49,7 +49,74 @@ version_control/default_cell_size=0.1
 
 [editor_plugins]
 
-enabled=PackedStringArray("res://addons/asset_placer/plugin.cfg", "res://addons/floatable_body/plugin.cfg", "res://addons/itch_uploader/plugin.cfg", "res://addons/lowpolyterrain/plugin.cfg", "res://addons/script-ide/plugin.cfg")
+enabled=PackedStringArray("res://addons/asset_placer/plugin.cfg", "res://addons/floatable_body/plugin.cfg", "res://addons/itch_uploader/plugin.cfg", "res://addons/script-ide/plugin.cfg")
+
+[importer_defaults]
+
+ArrayMesh={
+"_subresources": {},
+"animation/fps": 30,
+"animation/import": true,
+"animation/import_rest_as_RESET": false,
+"animation/remove_immutable_tracks": true,
+"animation/trimming": false,
+"array_mesh/deduplicate_surfaces": true,
+"gltf/embedded_image_handling": 1,
+"gltf/naming_version": 2,
+"gltf/texture_map_mode": 1,
+"import_script/path": "",
+"materials/extract": 0,
+"materials/extract_format": 0,
+"materials/extract_path": "",
+"mesh_library/use_node_names_as_mesh_names": false,
+"meshes/create_shadow_meshes": true,
+"meshes/ensure_tangents": true,
+"meshes/force_disable_compression": false,
+"meshes/generate_lods": true,
+"meshes/light_baking": 1,
+"meshes/lightmap_texel_size": 0.2,
+"nodes/apply_root_scale": true,
+"nodes/import_as_skeleton_bones": false,
+"nodes/root_name": "",
+"nodes/root_scale": 1.0,
+"nodes/root_script": null,
+"nodes/root_type": "",
+"nodes/use_name_suffixes": true,
+"nodes/use_node_type_suffixes": true,
+"skins/use_named_skins": true
+}
+MeshLibrary={
+"_subresources": {},
+"animation/fps": 30,
+"animation/import": true,
+"animation/import_rest_as_RESET": false,
+"animation/remove_immutable_tracks": true,
+"animation/trimming": false,
+"array_mesh/deduplicate_surfaces": true,
+"gltf/embedded_image_handling": 1,
+"gltf/naming_version": 2,
+"gltf/texture_map_mode": 1,
+"import_script/path": "",
+"materials/extract": 0,
+"materials/extract_format": 0,
+"materials/extract_path": "",
+"mesh_library/use_node_names_as_mesh_names": false,
+"meshes/create_shadow_meshes": true,
+"meshes/ensure_tangents": true,
+"meshes/force_disable_compression": false,
+"meshes/generate_lods": true,
+"meshes/light_baking": 1,
+"meshes/lightmap_texel_size": 0.2,
+"nodes/apply_root_scale": true,
+"nodes/import_as_skeleton_bones": false,
+"nodes/root_name": "",
+"nodes/root_scale": 1.0,
+"nodes/root_script": null,
+"nodes/root_type": "",
+"nodes/use_name_suffixes": true,
+"nodes/use_node_type_suffixes": true,
+"skins/use_named_skins": true
+}
 
 [input]
 
@@ -238,10 +305,20 @@ player_jump={
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":32,"key_label":0,"unicode":32,"location":0,"echo":false,"script":null)
 ]
 }
+shift_lock={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":76,"key_label":0,"unicode":108,"location":0,"echo":false,"script":null)
+]
+}
+demolish={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194308,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
 
 [itch_uploader]
 
-itch_page_url="https://mu-gua-here.itch.io/birth-of-civilisation"
+itch_page_url="https://mu-gua-here.itch.io/first-stone"
 
 [navigation]
 

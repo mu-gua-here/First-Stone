@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://dqlr0bede3xqd"]
 
 [ext_resource type="Script" uid="uid://c1x2k2iiyluhs" path="res://scripts/player.gd" id="1_3vyb7"]
+[ext_resource type="PackedScene" uid="uid://bkgvgs6dkcy8o" path="res://scenes/nameplate.tscn" id="2_nameplate"]
 
 [sub_resource type="ORMMaterial3D" id="ORMMaterial3D_2wyq8"]
 albedo_color = Color(0.48235294, 1, 1, 1)
@@ -12,12 +13,17 @@ material = SubResource("ORMMaterial3D_2wyq8")
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_2tfuy"]
 
-[node name="Player" type="CharacterBody3D" unique_id=402418124]
-transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 0, 0)
+[node name="Player" type="CharacterBody3D" unique_id=402418124 node_paths=PackedStringArray("nameplate", "body_mesh")]
 script = ExtResource("1_3vyb7")
+nameplate = NodePath("Nameplate")
+body_mesh = NodePath("MeshInstance3D")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1348972503]
 mesh = SubResource("CapsuleMesh_og1vs")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1069096531]
 shape = SubResource("CapsuleShape3D_2tfuy")
+
+[node name="Nameplate" parent="." unique_id=103275669 instance=ExtResource("2_nameplate")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, 0)
+show_bars = false

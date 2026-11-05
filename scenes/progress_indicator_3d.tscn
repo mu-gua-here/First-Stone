@@ -2,25 +2,52 @@
 
 [ext_resource type="Script" uid="uid://cgvabl0q1sgw5" path="res://scripts/progress_indicator_3d.gd" id="1_pi3d"]
 
-[sub_resource type="ViewportTexture" id="ViewportTexture_pi3d"]
+[sub_resource type="ViewportTexture" id="ViewportTexture_7d2os"]
 viewport_path = NodePath("Sprite3D/SubViewport")
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bg"]
+bg_color = Color(0.05, 0.05, 0.07, 0.65)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(1, 1, 1, 0.25)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_fill"]
+bg_color = Color(0.4, 0.8, 0.3, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
 
 [node name="ProgressIndicator3D" type="Node3D" unique_id=661065465]
 script = ExtResource("1_pi3d")
 
-[node name="Sprite3D" type="Sprite3D" parent="." unique_id=1707124272]
-pixel_size = 0.005
-billboard = 1
-shaded = true
-texture = SubResource("ViewportTexture_pi3d")
+[node name="Sprite3D" type="Sprite3D" parent="." unique_id=1002025196]
+pixel_size = 0.02
+billboard = 2
+no_depth_test = true
+render_priority = 127
+texture = SubResource("ViewportTexture_7d2os")
 
-[node name="SubViewport" type="SubViewport" parent="Sprite3D" unique_id=2113247328]
-disable_3d = true
+[node name="SubViewport" type="SubViewport" parent="Sprite3D" unique_id=1052447099]
 transparent_bg = true
-size = Vector2i(100, 30)
+size = Vector2i(200, 30)
 
-[node name="ProgressBar" type="ProgressBar" parent="Sprite3D/SubViewport" unique_id=1613809675]
-custom_minimum_size = Vector2(100, 25)
-offset_right = 100.0
-offset_bottom = 25.0
+[node name="ProgressBar" type="ProgressBar" parent="Sprite3D/SubViewport" unique_id=1332324327]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_override_styles/background = SubResource("StyleBoxFlat_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_fill")
+max_value = 1.0
+step = 0.0
 show_percentage = false

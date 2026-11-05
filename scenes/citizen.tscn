@@ -12,8 +12,38 @@ material = SubResource("ORMMaterial3D_3aquc")
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_fhwll"]
 
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_citizen"]
+properties/0/path = NodePath(".:net_position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:net_name")
+properties/1/spawn = true
+properties/1/replication_mode = 2
+properties/2/path = NodePath(".:net_id")
+properties/2/spawn = true
+properties/2/replication_mode = 2
+properties/3/path = NodePath(".:net_age")
+properties/3/spawn = true
+properties/3/replication_mode = 2
+properties/4/path = NodePath(".:net_job")
+properties/4/spawn = true
+properties/4/replication_mode = 2
+properties/5/path = NodePath(".:net_happiness")
+properties/5/spawn = true
+properties/5/replication_mode = 2
+properties/6/path = NodePath(".:net_energy")
+properties/6/spawn = true
+properties/6/replication_mode = 2
+properties/7/path = NodePath(".:net_health")
+properties/7/spawn = true
+properties/7/replication_mode = 2
+properties/8/path = NodePath(".:net_hostile")
+properties/8/spawn = true
+properties/8/replication_mode = 2
+
 [node name="Citizen" type="CharacterBody3D" unique_id=408327407]
-transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 0, 0)
+collision_layer = 4
+collision_mask = 7
 script = ExtResource("1_fhwll")
 fluid_damp = 10.0
 
@@ -24,9 +54,6 @@ mesh = SubResource("CapsuleMesh_3aquc")
 shape = SubResource("CapsuleShape3D_fhwll")
 
 [node name="NavigationAgent3D" type="NavigationAgent3D" parent="." unique_id=1087809605]
-path_desired_distance = 0.1
-target_desired_distance = 0.1
-path_max_distance = 0.51
 avoidance_enabled = true
 height = 0.1
 radius = 0.1
@@ -35,3 +62,7 @@ max_neighbors = 1
 time_horizon_obstacles = 0.5
 max_speed = 1.0
 use_3d_avoidance = true
+
+[node name="Sync" type="MultiplayerSynchronizer" parent="."]
+replication_interval = 0.05
+replication_config = SubResource("SceneReplicationConfig_citizen")

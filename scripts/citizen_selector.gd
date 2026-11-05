@@ -7,28 +7,29 @@ class_name CitizenSelector
 @export var view_camera: Camera3D
 @export var max_select_distance: float = 100.0
 @export var panel_offset: Vector2 = Vector2(40, -60)  # offset from citizen's screen pos to panel's top-left
-@export var ring_color: Color = Color(1.0, 0.85, 0.2)
 @export var click_assist_pixels: float = 40.0 # if the raycast misses, select the nearest citizen/player within this many screen pixels of the click instead -- citizens are small, constantly-moving targets
 
 var selected_citizen: Node3D = null
-var panel: PanelContainer
-var name_label: Label
-var id_label: Label
-var stats_label: RichTextLabel
-var bars_box: VBoxContainer
-var hostile_label: Label
-var _bar_rows: Dictionary = {} # stat name -> {row, bar, fill, value}
-var assign_hint_label: Label
-var ui_layer: CanvasLayer
-var ring: MeshInstance3D
 var builder: Node = null
 
-const GAME_FONT := preload("res://fonts/lilita_one_regular.ttf")
+## UI + ring are real nodes in main.tscn (CitizenSelector/UI/Panel/..., CitizenSelector/Ring):
+## restyle and move them in the 2D/3D editor. This script only fills in the text and numbers.
+@export_group("Nodes")
+@export var panel: PanelContainer
+@export var name_label: Label
+@export var id_label: Label
+@export var stats_label: RichTextLabel
+@export var bars_box: VBoxContainer ## one row per stat, each named after its stat ("Happiness", "Health", "Energy") with children Name / Bar / Value
+@export var hostile_label: Label
+@export var assign_hint_label: Label
+@export var ring: MeshInstance3D
 
 func _ready() -> void:
 	add_to_group("citizen_selector")
-	_build_ui()
-	_build_ring()
+	panel.visible = false
+	ring.visible = false
+	hostile_label.visible = false
+	assign_hint_label.visible = false
 	# Try to auto-find the camera if not assigned, so this works even if you
 	# forget to wire it up in the Inspector.
 	if view_camera == null:
@@ -45,7 +46,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		# citizens while placing structures.
 		if builder != null and builder.interact_mode:
 			return
-		_try_select_at(event.position)
+		_try_select_at(Globals.aim_position())
 
 func _try_select_at(screen_pos: Vector2) -> void:
 	if view_camera == null:
@@ -115,6 +116,22 @@ func _find_nearest_on_screen(screen_pos: Vector2) -> Node3D:
 	
 	return best
 
+## Runs an assignment. Online the citizen lives on the server, so ask it to do this and show its answer when it
+## arrives (WorldSync.assign_result); the ids are the same on every copy of the world.
+func _execute(action: Action, target) -> bool:
+	if not Globals.online_client:
+		return PolicyEngine.execute(action, selected_citizen, target)
+	var world_sync = Globals.world_sync
+	if not world_sync.assign_result.is_connected(_on_assign_result):
+		world_sync.assign_result.connect(_on_assign_result)
+	var target_id: String = target.id if target is BuildingInstance else str(target)
+	world_sync.req_assign(action.kind, selected_citizen.data.id, target_id)
+	return true # optimistic; the server's real answer follows
+
+func _on_assign_result(ok: bool) -> void:
+	_flash_assign_hint(ok)
+	_refresh_panel()
+
 ## Resolves a world-space hit position to a placed structure or construction site id
 func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 	if builder == null:
@@ -123,18 +140,18 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 	var assigned := false
 	# Construction site: assign selected citizen as a builder
 	var site_id = builder.get_nearest_construction_site(world_pos)
-	if site_id != builder.NO_ID and builder.construction_sites[site_id].position.distance_to(world_pos) <= 1.5:
-		assigned = PolicyEngine.execute(Action.new_assign_build_task(), selected_citizen, site_id)
+	if site_id != builder.NO_ID and Builder.flat_distance(builder.construction_sites[site_id].position, world_pos) <= Builder.PICK_RADIUS:
+		assigned = _execute(Action.new_assign_build_task(), site_id)
 		_flash_assign_hint(assigned)
 		_refresh_panel()
 		return true
 	
 	# Gatherable structure (tree): assign selected citizen to gather it
-	var id = builder.get_structure_at_point(world_pos, 1.5)
+	var id = builder.get_structure_at_point(world_pos, Builder.PICK_RADIUS)
 	if id != builder.NO_ID:
 		var structure_index = builder.get_structure_index(id)
 		if structure_index >= 0 and structure_index < builder.structures.size() and builder.structures[structure_index].gatherable:
-			assigned = PolicyEngine.execute(Action.new_assign_gather(), selected_citizen, id)
+			assigned = _execute(Action.new_assign_gather(), id)
 			_flash_assign_hint(assigned)
 			_refresh_panel()
 			return true
@@ -148,9 +165,9 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 	
 	assigned = false
 	if structure.type == Structure.Type.HOUSE or structure.type == Structure.Type.SHOP:
-		assigned = PolicyEngine.execute(Action.new_assign_housing(), selected_citizen, instance)
+		assigned = _execute(Action.new_assign_housing(), instance)
 	elif structure.type == Structure.Type.WORKPLACE:
-		assigned = PolicyEngine.execute(Action.new_assign_job(), selected_citizen, instance)
+		assigned = _execute(Action.new_assign_job(), instance)
 	else:
 		return false
 	
@@ -159,8 +176,6 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 	return true
 
 func _flash_assign_hint(success: bool) -> void:
-	if assign_hint_label == null:
-		return
 	assign_hint_label.visible = true
 	assign_hint_label.text = "Assigned!" if success else "No free slot there."
 	assign_hint_label.modulate = Color(0.45, 0.9, 0.45) if success else Color(0.9, 0.45, 0.45)
@@ -169,8 +184,7 @@ func _select(citizen: Node3D) -> void:
 	selected_citizen = citizen
 	panel.visible = true
 	ring.visible = true
-	if assign_hint_label:
-		assign_hint_label.visible = false
+	assign_hint_label.visible = false
 	_refresh_panel()
 
 func _deselect() -> void:
@@ -234,7 +248,7 @@ func _refresh_panel() -> void:
 
 	_begin_bars()
 	_set_bar("Happiness", d.happiness, 100.0)
-	_set_bar("Health", d.health, 100.0)
+	_set_bar("Health", selected_citizen.health, selected_citizen.max_health)
 	_set_bar("Energy", d.energy, 100.0)
 	_end_bars()
 
@@ -255,155 +269,29 @@ func _refresh_player_panel() -> void:
 	_end_bars()
 	hostile_label.visible = false
 
-# Stat bars are real ProgressBar controls, not text. The old version drew them out of the
-# block characters U+2588/U+2591, which the game font has no glyphs for; desktop quietly
-# falls back to a system font, but a web export has no system fonts to fall back on, so the
-# bars rendered as empty boxes.
+# Stat bars are real ProgressBar controls, not text (the game font has no block-character glyphs,
+# and a web export has no system font to fall back on). Each row is a node under `bars_box`,
+# named after its stat, with children Name / Bar / Value -- see main.tscn.
 var _bars_used: Array[String] = []
 
 func _begin_bars() -> void:
 	_bars_used.clear()
 
 func _end_bars() -> void:
-	for stat in _bar_rows:
-		_bar_rows[stat].row.visible = _bars_used.has(stat)
+	for row in bars_box.get_children():
+		row.visible = _bars_used.has(row.name)
 
 func _set_bar(stat: String, value: float, max_value: float) -> void:
+	var row := bars_box.get_node_or_null(NodePath(stat))
+	if row == null:
+		push_warning("CitizenSelector: no row named '%s' under bars_box -- add one in main.tscn." % stat)
+		return
 	_bars_used.append(stat)
-	var entry := _get_bar_row(stat)
-	var bar: ProgressBar = entry.bar
+	var bar: ProgressBar = row.get_node("Bar")
 	bar.max_value = maxf(max_value, 1.0)
 	bar.value = clampf(value, 0.0, bar.max_value)
 	var pct := int(round(bar.value / bar.max_value * 100.0))
-	entry.value.text = "%d%%" % pct
-	entry.fill.bg_color = Color(0.37, 0.83, 0.37) if pct > 60 else (Color(0.88, 0.78, 0.29) if pct > 30 else Color(0.88, 0.37, 0.37))
-
-func _get_bar_row(stat: String) -> Dictionary:
-	if _bar_rows.has(stat):
-		return _bar_rows[stat]
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 12)
-
-	var name_label_row := Label.new()
-	name_label_row.text = stat + ":"
-	name_label_row.add_theme_font_override("font", GAME_FONT)
-	name_label_row.add_theme_font_size_override("font_size", 22)
-	name_label_row.custom_minimum_size.x = 150
-	row.add_child(name_label_row)
-
-	var bar := ProgressBar.new()
-	bar.show_percentage = false
-	bar.custom_minimum_size = Vector2(240, 22)
-	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(1, 1, 1, 0.12)
-	bg.set_corner_radius_all(4)
-	var fill := StyleBoxFlat.new()
-	fill.set_corner_radius_all(4)
-	bar.add_theme_stylebox_override("background", bg)
-	bar.add_theme_stylebox_override("fill", fill)
-	row.add_child(bar)
-
-	var value_label := Label.new()
-	value_label.add_theme_font_override("font", GAME_FONT)
-	value_label.add_theme_font_size_override("font_size", 22)
-	value_label.custom_minimum_size.x = 70
-	row.add_child(value_label)
-
-	bars_box.add_child(row)
-	var entry := {"row": row, "bar": bar, "fill": fill, "value": value_label}
-	_bar_rows[stat] = entry
-	return entry
-
-func _build_ui() -> void:
-	ui_layer = CanvasLayer.new()
-	add_child(ui_layer)
-	
-	panel = PanelContainer.new()
-	panel.visible = false
-	# Free-floating: top-left anchored at (0,0,0,0) so `panel.position` directly
-	# controls where it sits on screen -- this is what lets it follow the
-	# citizen instead of staying pinned to a screen corner.
-	panel.anchor_left = 0.0
-	panel.anchor_right = 0.0
-	panel.anchor_top = 0.0
-	panel.anchor_bottom = 0.0
-	panel.custom_minimum_size = Vector2(560, 368)  # 2x width, 2x height = 4x area vs. original 280x184
-	ui_layer.add_child(panel)
-	
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.07, 0.07, 0.09, 0.92)
-	style.border_color = ring_color
-	style.set_border_width_all(3)
-	style.set_corner_radius_all(10)
-	style.set_content_margin_all(20)
-	panel.add_theme_stylebox_override("panel", style)
-	
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	panel.add_child(vbox)
-	
-	name_label = Label.new()
-	name_label.add_theme_font_override("font", GAME_FONT)
-	name_label.add_theme_font_size_override("font_size", 32)
-	vbox.add_child(name_label)
-	
-	id_label = Label.new()
-	id_label.add_theme_font_override("font", GAME_FONT)
-	id_label.add_theme_font_size_override("font_size", 22)
-	vbox.add_child(id_label)
-	
-	var sep = HSeparator.new()
-	vbox.add_child(sep)
-	
-	stats_label = RichTextLabel.new()
-	stats_label.bbcode_enabled = true
-	stats_label.fit_content = true
-	stats_label.scroll_active = false
-	stats_label.add_theme_font_override("normal_font", GAME_FONT)
-	stats_label.add_theme_font_override("bold_font", GAME_FONT)
-	stats_label.add_theme_font_size_override("normal_font_size", 22)
-	stats_label.add_theme_font_size_override("bold_font_size", 22)
-	stats_label.custom_minimum_size = Vector2(520, 0)
-	vbox.add_child(stats_label)
-
-	bars_box = VBoxContainer.new()
-	bars_box.add_theme_constant_override("separation", 10)
-	vbox.add_child(bars_box)
-
-	hostile_label = Label.new()
-	hostile_label.add_theme_font_override("font", GAME_FONT)
-	hostile_label.add_theme_font_size_override("font_size", 22)
-	hostile_label.add_theme_color_override("font_color", Color(1.0, 0.33, 0.33))
-	hostile_label.visible = false
-	vbox.add_child(hostile_label)
-	
-	assign_hint_label = Label.new()
-	assign_hint_label.add_theme_font_override("font", GAME_FONT)
-	assign_hint_label.add_theme_font_size_override("font_size", 20)
-	assign_hint_label.visible = false
-	vbox.add_child(assign_hint_label)
-
-func _build_ring() -> void:
-	# Flat circular outline on the ground beneath the selected citizen
-	# Built from a TorusMesh flattened on Y so it reads as a ring
-	var torus = TorusMesh.new()
-	torus.inner_radius = 0.55
-	torus.outer_radius = 0.7
-	torus.rings = 24
-	
-	var mat = StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = ring_color
-	mat.emission_enabled = true
-	mat.emission = ring_color
-	mat.emission_energy_multiplier = 1.5
-	torus.material = mat
-	
-	ring = MeshInstance3D.new()
-	ring.mesh = torus
-	ring.scale = Vector3(1.0, 0.15, 1.0)  # flatten the torus into a ground ring
-	ring.visible = false
-	add_child(ring)
+	row.get_node("Value").text = "%d%%" % pct
+	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill != null:
+		fill.bg_color = Color(0.37, 0.83, 0.37) if pct > 60 else (Color(0.88, 0.78, 0.29) if pct > 30 else Color(0.88, 0.37, 0.37))

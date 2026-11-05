@@ -18,16 +18,44 @@ class_name Carrier
 ## push_force / its mass (F = m*a).
 @export var push_force := 300.0
 
+## Health, falling and dying are shared by everyone who extends Carrier (Player and Citizen), so they
+## obey the same rules. What differs is only what dying DOES: see _on_death().
+signal health_changed(current: float, max: float)
+signal died
+
+@export_category("Mechanics")
+## Landing (or splashing down) faster than this (m/s) hurts. Damage = excess speed, halved in water.
+@export var fall_dmg_threshold := 14.0
+## Falling below this world height kills the carrier (it fell out of the world).
+@export var kill_height := -100.0
+
+@export_category("Physiology")
+@export var max_health: float = 100.0
+## Assign to health directly -- the setter clamps, emits health_changed and handles death.
+@export_range(0.0, 100.0) var health: float = 100.0:
+	set(value):
+		health = clampf(value, 0.0, max_health)
+		health_changed.emit(health, max_health)
+		if health <= 0.0:
+			_die()
+
+## True from the moment health hits 0 until (for the player only) the respawn.
+var is_dead := false
+
+## Upward swim acceleration (m/s^2) used by _swim_toward_surface() to tread water. Must beat the
+## sink pull (sink_accel * fluid_vertical_damp / fluid_damp) for carriers to be able to float.
+@export var swim_accel := 10.0
+
 const MAX_IMPACT_SPEED := 15.0 # cap on a single impact's velocity change (m/s)
 # Horizontal steering: how fast velocity moves toward the wanted velocity (m/s^2).
-const GROUND_STEER_ACCEL := 40.0 # with input (incl. pushing back against an impact). Higher = snappier turns
+const GROUND_STEER_ACCEL := 60.0 # with input (incl. pushing back against an impact). Higher = snappier turns
 const AIR_STEER_ACCEL := 25.0 # airborne steering. The player hops while walking, so most frames are airborne
 const WATER_STEER_ACCEL := 60.0 # must beat fluid drag (fluid_damp * speed) or swimming stalls
 const COYOTE_TIME := 0.25 # seconds after leaving the ground that still count as grounded for steering
 var _since_grounded := 0.0
 # Coasting when there is no input: friction on the ground, none in the air.
 const GROUND_FRICTION := 10.0
-const AIR_FRICTION := 0.0
+const AIR_FRICTION := 10.0 # was 0.0: the player is airborne most of the time (walking hops), so no air friction = endless sliding
 # A contact is a deck (something holding us up) when its normal faces upward (y > this) AND the
 # contact point is below our centre. Tilted decks have shallow normals, so this uses the contact
 # height as well, instead of the normal alone.
@@ -38,7 +66,13 @@ const CEILING_NORMAL_Y := -0.7 # contacts facing down this hard are ceilings, ne
 # points into whatever we hit, so the pre-slide value is what the push logic needs to read.
 var pre_slide_velocity := Vector3.ZERO
 
-var builder: Node = null
+# Resolved lazily: the Player sits BEFORE the Builder in main.tscn, so Globals.builder is still
+# null during the Player's own _ready(). Reading it later picks it up.
+var builder: Node = null:
+	get:
+		if builder == null:
+			builder = Globals.builder
+		return builder
 
 ## Sinking no buoyancy
 ## pulled down GRADUALLY rather than dropping like on land: a constant downward pull (sink_accel)
@@ -46,6 +80,11 @@ var builder: Node = null
 ## m/s. "In the water" = the water probe (centre of our collision shape) is below
 ## FluidArea3D.get_height(), i.e. roughly half submerged. See _apply_gravity().
 @export var fluid_damp := 4.0
+
+## Drag on VERTICAL velocity in water. Much lower than fluid_damp so that letting go of swim up/down
+## doesn't stop you dead -- you keep coasting and slow gradually. (Terminal sink speed and terminal
+## swim speed are unchanged: both are rescaled by fluid_vertical_damp / fluid_damp.)
+@export var fluid_vertical_damp := 2.0
 
 ## Downward acceleration while in water (m/s^2). Terminal sink speed = sink_accel / fluid_damp
 ## (3.0 / 4.0 = 0.75 m/s). Raise for a faster sink, lower for a slower one.
@@ -59,6 +98,38 @@ var builder: Node = null
 ## The FluidArea3D we're currently inside (null on land). Set by fluid_area_enter/exit.
 var fluid_area: FluidArea3D = null
 var _water_probe: CollisionShape3D = null
+
+# Runs once when health reaches 0 (or we fall out of the world). Overridden by subclasses.
+func _die() -> void:
+	if is_dead:
+		return
+	is_dead = true
+	died.emit()
+	_on_death()
+
+# What dying does. Default: gone for good (citizens). Player overrides this to respawn.
+func _on_death() -> void:
+	queue_free()
+
+# Call once per physics frame. Falling out of the world is death.
+func _check_out_of_world() -> void:
+	if global_position.y < kill_height:
+		_die()
+
+# Call right AFTER move_and_slide() with the downward speed captured right BEFORE it (the slide zeroes
+# velocity.y on landing) and whether we were in the water. Landing in water hurts half as much.
+func _apply_fall_damage(fall_speed: float, was_in_fluid: bool) -> void:
+	if (is_on_floor() or was_in_fluid) and fall_speed > fall_dmg_threshold:
+		health -= (fall_speed - fall_dmg_threshold) * (1.0 if was_in_fluid else 2.0)
+
+# Treading water: rises while the body centre is below the surface, easing off near it, so a carrier
+# with no swim input floats half-submerged instead of sinking to the bottom. Call after _apply_gravity().
+func _swim_toward_surface(delta: float) -> void:
+	if not is_in_fluid():
+		return
+	var p := water_probe_position()
+	var depth := fluid_area.get_surface_height(p) - p.y
+	velocity.y += swim_accel * clampf(depth, 0.0, 1.0) * delta
 
 # One-time impact: a rigid body (or another carrier) hit us with this velocity change.
 func receive_push(dv: Vector3) -> void:
@@ -74,7 +145,10 @@ func steer_horizontal(wanted: Vector3, delta: float) -> void:
 	var has_input := wanted.length_squared() > 0.0001
 	var rate: float
 	if is_in_fluid():
-		rate = WATER_STEER_ACCEL if has_input else 0.0 # no input: fluid drag does the slowing
+		# Fluid drag (fluid_damp) shaves a fraction off velocity every frame, so a fixed accel tops out at
+		# accel / fluid_damp m/s -- which capped swimming speed and made running pointless. Add the drag the
+		# wanted speed will cost, so we can actually reach it (walk and run differ again).
+		rate = (WATER_STEER_ACCEL + fluid_damp * wanted.length()) if has_input else 0.0 # no input: fluid drag does the slowing
 	elif _since_grounded < COYOTE_TIME:
 		rate = GROUND_STEER_ACCEL if has_input else GROUND_FRICTION
 	else:
@@ -108,6 +182,7 @@ func _carrier_ready() -> void:
 	# we have to explicitly opt in to colliding with that layer here, or
 	# standing trees would stop physically blocking movement entirely.
 	set_collision_mask_value(2, true)
+	set_collision_mask_value(3, true) # world: the Base / Structures GridMaps sit on layer 3
 
 	for owner_id in get_shape_owners():
 		var collision = shape_owner_get_owner(owner_id)
@@ -121,8 +196,12 @@ func _carrier_ready() -> void:
 
 func _apply_gravity(delta: float) -> void:
 	if is_in_fluid():
-		velocity.y -= sink_accel * delta
-		velocity += -velocity * fluid_damp * delta
+		# Horizontal: full fluid drag. Vertical: weaker drag, with the sink pull scaled so the terminal
+		# sink speed (sink_accel / fluid_damp) stays the same.
+		velocity.y -= sink_accel * (fluid_vertical_damp / fluid_damp) * delta
+		velocity.y -= velocity.y * fluid_vertical_damp * delta
+		velocity.x -= velocity.x * fluid_damp * delta
+		velocity.z -= velocity.z * fluid_damp * delta
 		return
 	if not is_on_floor():
 		velocity += get_gravity() * delta
@@ -184,7 +263,11 @@ func _push_colliding_bodies() -> void:
 		if collider is RigidBody3D:
 			var reduced_mass: float = mass * other_mass / total_mass
 			var impulse: float = minf(incoming_speed * reduced_mass, push_force * get_physics_process_delta_time())
-			collider.apply_impulse(push_dir * impulse, collision.get_position() - collider.global_position)
+			var rel_position: Vector3 = collision.get_position() - collider.global_position
+			if collider.has_method("net_push"):
+				collider.net_push(push_dir * impulse, rel_position) # online: the prop lives on the server
+			else:
+				collider.apply_impulse(push_dir * impulse, rel_position)
 			velocity -= push_dir * impulse / mass # equal and opposite
 		elif collider is CharacterBody3D and collider.has_method("receive_push"):
 			collider.receive_push(push_dir * incoming_speed * mass / total_mass)

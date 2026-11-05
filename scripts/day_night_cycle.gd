@@ -11,7 +11,7 @@ class_name DayNightCycle
 
 @export_group("General")
 ## How many real-world seconds a full in-game day takes.
-@export var day_length_seconds: float = 600.0
+@export var day_length_seconds: float = 1200.0
 @export_range(0.0, 1.0) var time_of_day: float = 0.25
 ## Where the cycle starts, 0..1
 @export_range(0.0, 1.0) var start_time: float = 0.25

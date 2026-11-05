@@ -10,6 +10,10 @@ static func provide_aabb(node: Node3D) -> AABB:
 static func get_node_aabb(node: Node, exclude_top_level_transform: bool = true) -> AABB:
 	var bounds: AABB = AABB()
 
+	# Only 3D nodes can contribute to a 3D AABB
+	if not node is Node3D:
+		return bounds
+
 	# Do not include children that is queued for deletion
 	if node.is_queued_for_deletion():
 		return bounds
@@ -20,6 +24,8 @@ static func get_node_aabb(node: Node, exclude_top_level_transform: bool = true) 
 
 	# Recurse through all children
 	for child in node.get_children():
+		if not child is Node3D:
+			continue
 		var child_bounds: AABB = get_node_aabb(child, false)
 		if bounds.size == Vector3.ZERO:
 			bounds = child_bounds
@@ -27,6 +33,6 @@ static func get_node_aabb(node: Node, exclude_top_level_transform: bool = true) 
 			bounds = bounds.merge(child_bounds)
 
 	if !exclude_top_level_transform:
-		bounds = node.transform * bounds
+		bounds = (node as Node3D).transform * bounds
 
 	return bounds

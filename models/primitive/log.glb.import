@@ -3,7 +3,7 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://8hqobg1l8cw3"
+uid="uid://4r7kshtot0iw"
 path="res://.godot/imported/log.glb-6b7721758489cde4c2bae14d437fe1e2.scn"
 
 [deps]
@@ -13,7 +13,7 @@ dest_files=["res://.godot/imported/log.glb-6b7721758489cde4c2bae14d437fe1e2.scn"
 
 [params]
 
-nodes/root_type="RigidBody3D"
+nodes/root_type=""
 nodes/root_name=""
 nodes/root_script=null
 mesh_library/use_node_names_as_mesh_names=false
@@ -42,4 +42,4 @@ materials/extract_path=""
 _subresources={}
 gltf/naming_version=2
 gltf/embedded_image_handling=1
-gltf/texture_map_mode=0
+gltf/texture_map_mode=1

@@ -1,7 +1,7 @@
 extends Carrier
 
 # Movement settings
-@export var BASE_SPEED = 2.0
+@export var BASE_SPEED = 4.0
 @export var BOUNCE_HEIGHT := 4.0
 var actual_speed: float
 var wander_timer: float = 0.0
@@ -14,6 +14,17 @@ const CHASE_REPATH_INTERVAL := 0.25
 
 # Distance a citizen needs to be from a gatherable/build cell to start contributing
 const WORK_REACH := 1.5
+
+# Energy per second spent swimming (the player's move_energy)
+const SWIM_ENERGY := 0.1
+
+# Health lost per second while energy is below 30 (the player's hunger_dmg)
+@export var hunger_dmg := 0.2
+
+## Below this much health & energy the player starts to slow down (and jump / swim weaker), reaching a standstill at 0.
+## Stacks multiplicatively with the low-energy slowdown, so being low on both is much worse than either.
+@export var slow_below_health := 50.0
+@export var slow_below_energy := 50.0
 
 # Attack settings (only relevant while is_chasing_player is true)
 @export var attack_damage: float = 10.0
@@ -29,6 +40,26 @@ var _wanted_velocity := Vector3.ZERO
 
 @export var data: CitizenData
 
+# --- Multiplayer (see network.gd) ---
+# Only the SERVER runs a citizen's AI. On a client the copy spawned by the MultiplayerSpawner is a PUPPET: it
+# skips all the AI below and just follows the net_* values, which the server fills in every physics frame and
+# the "Sync" MultiplayerSynchronizer (citizen.tscn) replicates. The puppet copies them into `data` / `health`,
+# so everything that reads a citizen (the selection panel, happiness colour) works unchanged.
+var is_puppet := false
+var net_position := Vector3.ZERO # Vector3.ZERO = nothing received yet
+var net_name := ""
+var net_id := ""
+var net_age := 0
+var net_job := ""
+var net_happiness := 50.0
+var net_energy := 100.0
+var net_health := 100.0
+var net_hostile := false
+const PUPPET_SMOOTHING := 15.0
+const ATTACK_RANGE := 1.3 # flat distance at which a chasing citizen hits a player (two capsule radii and a bit)
+const PUSH_RPC_INTERVAL := 0.1 # a client's player shoving a puppet reports it to the server at most this often
+var _push_rpc_cooldown := 0.0
+
 var happiness_material: StandardMaterial3D
 
 var housing_check_timer: float = 0.0
@@ -36,24 +67,38 @@ const HOUSING_CHECK_INTERVAL := 2.0 # how often to re-derive housing status from
 var _has_housing: bool = false
 
 var is_gathering: bool = false
+var _warned_unreachable := false
+var _debug_gather_timer := 0.0
 const NO_ID := Builder.NO_ID
 var gather_target_id: String = NO_ID
+var gather_filter: String = "" # resource type to look for when picking the next tree ("" = anything gatherable)
+
+# Jobs: an employed citizen keeps themselves busy (see _update_job)
+const JOB_CHECK_INTERVAL := 3.0
+var _job_timer := 0.0
 
 # Building -- entered only via explicit assignment (manual click for now)
 var is_building: bool = false
 var build_target_id: String = NO_ID
 
-# Pushing a gathered resource prop back toward the spawn/stockpile point
-# (Carrier.SPAWN_POINT) after a gather completes
+# Pushing a gathered resource prop back toward the stockpile (Builder.stockpile_position)
+# after a gather completes. The citizen first walks round to the far side of the prop, then
+# walks at the stockpile -- shoving the prop ahead of them.
 var is_pushing: bool = false
 var push_target: RigidBody3D = null
 var push_repath_timer: float = 0.0
 const PUSH_REPATH_INTERVAL := 0.3
+const PUSH_STANCE_DISTANCE := 0.7 # how far behind the prop to stand before shoving
+const PUSH_LATERAL_TOLERANCE := 0.5 # how far off the prop-to-stockpile line still counts as "lined up"
+
+func _init() -> void:
+	kill_height = -10.0 # citizens die this far below the world (the player's is Carrier's default)
 
 func _ready():
 	if data == null:
 		data = CitizenData.new()
 	
+	is_puppet = not multiplayer.is_server()
 	add_to_group("citizen")
 	_carrier_ready() # sets `builder` (see carrier.gd)
 	
@@ -63,6 +108,13 @@ func _ready():
 	happiness_material = StandardMaterial3D.new()
 	mesh_instance.set_surface_override_material(0, happiness_material)
 	update_happiness_color()
+	
+	if is_puppet:
+		# No AI / navigation here: wait for the server's first position, then follow it (see _puppet_process)
+		visible = net_position != Vector3.ZERO
+		if visible:
+			global_position = net_position
+		return
 	
 	# call_deferred only defers the CALL
 	_request_initial_wander()
@@ -81,11 +133,26 @@ func _request_initial_wander() -> void:
 	set_new_destination(_wander_target(100.0))
 
 func _exit_tree():
+	if is_puppet:
+		return # the server owns the Builder's records of this citizen
 	if builder and is_instance_valid(builder) and data:
 		builder.release_citizen(data.id)
 
 func _physics_process(delta):
+	if is_puppet:
+		_puppet_process(delta)
+		return
+	if is_dead:
+		return # died this frame, waiting to be freed (see Carrier._on_death)
 	_apply_gravity(delta) # see carrier.gd -- gradual sink in water, normal gravity on land
+	_swim_toward_surface(delta) # tread water like the player instead of sinking to the bottom
+	var in_fluid := is_in_fluid()
+	if in_fluid:
+		data.energy -= SWIM_ENERGY * delta # swimming is tiring, same as for the player
+		
+	var energy_mult := clampf(smoothstep(0.0, 1.0, data.energy * 0.02), 0.2, 1.0)
+	var health_mult := clampf(smoothstep(0.0, 1.0, health / maxf(slow_below_health, 0.001)), 0.2, 1.0)
+	var vitality_mult := energy_mult * health_mult
 	
 	# (gravity / sinking is applied above by _apply_gravity())
 	
@@ -101,6 +168,7 @@ func _physics_process(delta):
 	_update_gathering(delta)
 	_update_building(delta)
 	_update_pushing(delta)
+	_update_job(delta)
 	
 	# Update citizen stats
 	if data.job == "":
@@ -129,8 +197,9 @@ func _physics_process(delta):
 		chase_repath_timer -= delta
 		if chase_repath_timer <= 0.0:
 			chase_repath_timer = CHASE_REPATH_INTERVAL
-			if Globals.player:
-				set_new_destination(Globals.player.global_position)
+			var target := _nearest_player()
+			if target != null:
+				set_new_destination(target.net_position)
 		
 		# Tick down attack cooldown
 		if attack_cooldown > 0.0:
@@ -148,6 +217,11 @@ func _physics_process(delta):
 			if idle_timer <= 0:
 				set_new_destination(_wander_target(100.0))
 				idle_timer = clamp(randf_range(0.0, data.happiness * 0.2), 5.0, 20.0)
+	else:
+		# Working: the walk to the tree / site / prop used to have NO hop at all (only wandering did), which
+		# looked like the citizen had frozen. Hop while travelling, stand still once at the work spot.
+		if is_on_floor() and data.energy > 0.0 and not nav_agent.is_navigation_finished() and not _is_at_gather_target():
+			velocity.y = BOUNCE_HEIGHT
 	
 	if not nav_agent.is_navigation_finished() and data.energy > 0.0:
 		# Guards against the same "Invalid navigation index" error for targets that aren't
@@ -157,6 +231,9 @@ func _physics_process(delta):
 		# unreachable and querying it every frame is what spams the engine error. Just coast
 		# to a stop instead of repeatedly asking for a path that will never exist.
 		if not nav_agent.is_target_reachable():
+			if is_gathering and not _warned_unreachable:
+				_warned_unreachable = true
+				push_warning("Citizen %s: gather target %s is not reachable on the navmesh (target %s) -- standing still." % [name, gather_target_id, nav_agent.target_position])
 			_wanted_velocity = Vector3.ZERO
 		else:
 			var next = nav_agent.get_next_path_position()
@@ -171,32 +248,35 @@ func _physics_process(delta):
 	
 	# Slow citizen if citizen need food
 	var wanted := _wanted_velocity
-	if data.energy < 50.0:
-		var energy_mult = clamp(data.energy * 0.02, 0.25, 1.0)
-		wanted *= energy_mult
+	if data.energy < slow_below_energy:
+		wanted *= vitality_mult
 	
 	data.energy -= (data.metabolism + data.metabolism * Vector3(velocity.x, 0, velocity.z).length()) * delta
 	data.energy = clamp(data.energy, 0, 100)
 	
+	# Starving eats away at health, same rule as the player (see player.gd)
+	if data.energy < 30.0:
+		health -= hunger_dmg * delta
+	
 	steer_horizontal(wanted, delta)
 	_before_slide()
+	var fall_speed := -velocity.y # captured before move_and_slide() zeroes it on landing
 	move_and_slide()
+	_apply_fall_damage(fall_speed, in_fluid) # see carrier.gd -- same rule as the player
 	_push_colliding_bodies() # shared with player.gd, see carrier.gd -- must run AFTER move_and_slide() to read this frame's collisions
 	
 	# Real physical collision check — did we actually touch the player this frame?
 	if is_chasing_player and attack_cooldown <= 0.0:
-		for i in get_slide_collision_count():
-			var collision = get_slide_collision(i)
-			var collider = collision.get_collider()
-			if collider == Globals.player:
-				if collider.has_method("take_damage"):
-					collider.take_damage(attack_damage, global_position, attack_knockback_force)
-				attack_cooldown = attack_cooldown_time
-				break
+		var target := _nearest_player()
+		if target != null and Vector2(target.net_position.x - global_position.x, target.net_position.z - global_position.z).length() <= ATTACK_RANGE \
+				and absf(target.net_position.y - global_position.y) < 1.8:
+			# The hit is applied by the victim's own client (their Player lives there)
+			target.apply_damage.rpc_id(target.owner_id, attack_damage, global_position, attack_knockback_force)
+			attack_cooldown = attack_cooldown_time
+	
+	_publish_net_state()
 		
-	if position.y < -10:
-		velocity = Vector3.ZERO
-		position = Vector3(randf_range(-5, 5), 1, randf_range(-5, 5))
+	_check_out_of_world() # falling out of the world kills, see carrier.gd
 
 func _on_velocity_computed(safe_velocity: Vector3):
 	_wanted_velocity = Vector3(safe_velocity.x, 0.0, safe_velocity.z)
@@ -217,7 +297,7 @@ func _refresh_housing_status() -> void:
 	# something via CitizenSelector -> PolicyEngine (or a future policy).
 
 func _start_gathering() -> void:
-	var id = builder.get_nearest_gatherable(global_position)
+	var id = builder.get_nearest_gatherable(global_position, gather_filter)
 	if id == NO_ID:
 		return
 	_start_gathering_at(id)
@@ -225,9 +305,22 @@ func _start_gathering() -> void:
 func _start_gathering_at(id: String) -> void:
 	# Targeted version -- a specific tree assigned by the player or PolicyEngine.
 	# Also used by _start_gathering() after it resolves the nearest id.
+	_warned_unreachable = false
 	gather_target_id = id
 	is_gathering = true
-	set_new_destination(builder.get_structure_position(id))
+	# Trees are hand-placed in main.tscn at y = 4 (origin height), which is nowhere near the navmesh, so the
+	# agent called them unreachable (target_desired_height). Aim at the closest navmesh point instead.
+	var tree_pos: Vector3 = builder.get_structure_position(id)
+	set_new_destination(NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), tree_pos))
+
+# True while gathering and already within WORK_REACH of the tree (so no more hopping, the citizen is chopping)
+func _is_at_gather_target() -> bool:
+	if not is_gathering or builder == null:
+		return false
+	var p: Vector3 = builder.get_structure_position(gather_target_id)
+	if p == Vector3.INF:
+		return false
+	return global_position.distance_to(Vector3(p.x, global_position.y, p.z)) <= WORK_REACH
 
 func _update_gathering(delta: float) -> void:
 	if not is_gathering:
@@ -248,6 +341,14 @@ func _update_gathering(delta: float) -> void:
 	var target_pos = builder.get_structure_position(gather_target_id)
 	var target_world_pos = Vector3(target_pos.x, global_position.y, target_pos.z)
 	var close_enough = global_position.distance_to(target_world_pos) <= WORK_REACH
+	if OS.is_debug_build() and not close_enough:
+		_debug_gather_timer -= delta
+		if _debug_gather_timer <= 0.0:
+			_debug_gather_timer = 1.0
+			print("[gather-debug] %s pos=%s nav_target=%s final=%s finished=%s reachable=%s flat_dist=%.2f next=%s wanted=%s vel=%s energy=%.1f" % [
+				name, global_position, nav_agent.target_position, nav_agent.get_final_position(), nav_agent.is_navigation_finished(),
+				nav_agent.is_target_reachable(), Vector2(global_position.x - target_pos.x, global_position.z - target_pos.z).length(),
+				nav_agent.get_next_path_position(), _wanted_velocity, velocity, data.energy])
 	if not nav_agent.is_navigation_finished() and not close_enough:
 		return
 	
@@ -288,7 +389,7 @@ func _start_pushing_nearest_prop() -> void:
 	is_pushing = true
 	push_target = nearest
 	push_repath_timer = 0.0
-	set_new_destination(nearest.global_position)
+	set_new_destination(_push_destination())
 
 func _update_pushing(delta: float) -> void:
 	if not is_pushing:
@@ -305,7 +406,25 @@ func _update_pushing(delta: float) -> void:
 	push_repath_timer -= delta
 	if push_repath_timer <= 0.0:
 		push_repath_timer = PUSH_REPATH_INTERVAL
-		set_new_destination(push_target.global_position)
+		set_new_destination(_push_destination())
+
+# Where to walk while pushing: round the far side of the prop first, then straight at the
+# stockpile once lined up behind it, so the walk itself shoves the prop home.
+func _push_destination() -> Vector3:
+	var stock: Vector3 = builder.stockpile_position
+	var prop_pos := push_target.global_position
+	var toward := Vector3(stock.x - prop_pos.x, 0.0, stock.z - prop_pos.z)
+	if toward.length() < 0.05:
+		return prop_pos
+	toward = toward.normalized()
+
+	var rel := global_position - prop_pos
+	rel.y = 0.0
+	var along := rel.dot(toward) # negative = we are on the far side from the stockpile
+	var lateral := (rel - toward * along).length()
+	if along < -0.2 and lateral < PUSH_LATERAL_TOLERANCE:
+		return Vector3(stock.x, prop_pos.y, stock.z)
+	return prop_pos - toward * PUSH_STANCE_DISTANCE
 
 # Begins walking to an already-assigned construction site
 func _start_building(site_id: String) -> void:
@@ -340,6 +459,42 @@ func _update_building(delta: float) -> void:
 func set_new_destination(target):
 	nav_agent.target_position = target
 
+# --- Jobs -------------------------------------------------------------------
+
+# Called by PolicyEngine when the citizen is employed at a workplace.
+func set_job(title: String, task: int, workplace_id: String) -> void:
+	data.job = title
+	data.job_task = task
+	data.workplace_id = workplace_id
+	gather_filter = "wood" if task == Structure.JobTask.GATHER else ""
+	_job_timer = 0.0 # get to work straight away
+
+# Called by Builder when the citizen loses their job (workplace demolished, reassigned, ...).
+func clear_job() -> void:
+	data.job = ""
+	data.job_task = Structure.JobTask.NONE
+	data.workplace_id = ""
+	gather_filter = ""
+
+# An employed citizen with nothing on their hands goes looking for work in line with their job.
+# Only runs while idle, so manual assignments and an in-progress task are never overridden.
+func _update_job(delta: float) -> void:
+	if data.job == "" or builder == null:
+		return
+	if is_gathering or is_building or is_pushing:
+		return
+	_job_timer -= delta
+	if _job_timer > 0.0:
+		return
+	_job_timer = JOB_CHECK_INTERVAL
+	match data.job_task:
+		Structure.JobTask.GATHER:
+			_start_gathering()
+		Structure.JobTask.BUILD:
+			var site_id: String = builder.get_nearest_construction_site(global_position)
+			if site_id != NO_ID:
+				PolicyEngine.execute(Action.new_assign_build_task(), self, site_id)
+
 # Wander targets used to be raw random points with no regard for whether the navmesh
 # actually covers that spot
 func _wander_target(nav_range: float) -> Vector3:
@@ -360,3 +515,72 @@ func update_happiness_color():
 		return
 	_last_color_t = t
 	happiness_material.albedo_color = Color(1.0 - t, t, 0.0)
+
+# --- Multiplayer -------------------------------------------------------------
+
+# Server: the nearest connected player (the avatar the server keeps for each client) to chase / hit.
+# The server's own Player just stands at the spawn point, it is nobody.
+func _nearest_player() -> NetPlayer:
+	if Globals.network == null:
+		return null
+	var best: NetPlayer = null
+	var best_dist := INF
+	for child in Globals.network.net_players.get_children():
+		var avatar := child as NetPlayer
+		if avatar == null or avatar.net_position == Vector3.ZERO:
+			continue # not reported its position yet
+		var d := global_position.distance_squared_to(avatar.net_position)
+		if d < best_dist:
+			best_dist = d
+			best = avatar
+	return best
+
+# Server: copy what clients need to see into the replicated net_* values
+func _publish_net_state() -> void:
+	net_position = global_position
+	net_name = data.citizen_name
+	net_id = data.id
+	net_age = data.age
+	net_job = data.job
+	net_happiness = snappedf(data.happiness, 0.1)
+	net_energy = snappedf(data.energy, 0.1)
+	net_health = snappedf(health, 0.1)
+	net_hostile = is_chasing_player
+
+# Client: follow the server's copy of this citizen
+func _puppet_process(delta: float) -> void:
+	if net_position == Vector3.ZERO:
+		visible = false
+		return
+	if not visible:
+		visible = true
+		global_position = net_position
+	global_position = global_position.lerp(net_position, 1.0 - exp(-PUPPET_SMOOTHING * delta))
+	data.citizen_name = net_name
+	data.id = net_id
+	data.age = net_age
+	data.job = net_job
+	data.happiness = net_happiness
+	data.energy = net_energy
+	health = maxf(net_health, 0.01) # not 0: that would run the death logic here, the server decides who dies
+	is_chasing_player = net_hostile
+	update_happiness_color()
+	_push_rpc_cooldown -= delta
+
+# A shove (see Carrier._push_colliding_bodies). On a client the real citizen is on the server, so pass it on.
+func receive_push(dv: Vector3) -> void:
+	if is_puppet:
+		if _push_rpc_cooldown <= 0.0:
+			_push_rpc_cooldown = PUSH_RPC_INTERVAL
+			request_push.rpc_id(1, dv)
+		return
+	super.receive_push(dv)
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_push(dv: Vector3) -> void:
+	if not multiplayer.is_server() or Globals.network == null or dv.length() > MAX_IMPACT_SPEED + 0.5:
+		return
+	var avatar := Globals.network.net_players.get_node_or_null(str(multiplayer.get_remote_sender_id())) as NetPlayer
+	if avatar == null or avatar.net_position.distance_to(global_position) > 4.0:
+		return # not actually next to this citizen
+	receive_push(dv)

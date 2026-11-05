@@ -1,0 +1,21 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/pickup_popup.gd" id="1_popup"]
+[ext_resource type="FontFile" uid="uid://d0cxd77jybrcn" path="res://fonts/lilita_one_regular.ttf" id="2_font"]
+
+[node name="PickupPopup" type="Node3D" node_paths=PackedStringArray("label")]
+script = ExtResource("1_popup")
+label = NodePath("Label3D")
+
+[node name="Label3D" type="Label3D" parent="."]
+pixel_size = 0.01
+billboard = 1
+no_depth_test = true
+render_priority = 127
+outline_render_priority = 126
+modulate = Color(1, 0.88, 0.4, 1)
+outline_modulate = Color(0.2, 0.1, 0.03, 1)
+text = "+1"
+font = ExtResource("2_font")
+font_size = 72
+outline_size = 14

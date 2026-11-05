@@ -41,6 +41,7 @@ uniform float edge_fog_max_strength : hint_range(0.0, 1.0) = 1.0;
 uniform sampler2D depth_texture : hint_depth_texture, filter_linear_mipmap;
 
 varying vec3 v_world_pos;
+varying vec3 v_normal; // world-space flat face normal, identical on all 3 vertices of a triangle
 
 float wave_height(vec2 p) {
 	float h = 0.0;
@@ -57,14 +58,31 @@ void vertex() {
 	float h = wave_height(world_pos.xz);
 	VERTEX.y += h;
 	v_world_pos = world_pos + vec3(0.0, h, 0.0);
+
+	// Flat normal computed ANALYTICALLY. The mesh is un-indexed and each vertex carries the XZ
+	// offsets to the other two corners of its own triangle (UV = next corner, UV2 = the one
+	// after, cyclic), so all three vertices of a triangle evaluate the same three heights and
+	// output the same normal. This replaces the old dFdx/dFdy(VERTEX) normal, which breaks on
+	// pixels at triangle edges (helper-lane / MSAA extrapolation) and, at high amplitude where
+	// neighbouring triangles differ a lot, lit those pixels white.
+	vec2 ob = UV;
+	vec2 oc = UV2;
+	float hb = wave_height(world_pos.xz + ob);
+	float hc = wave_height(world_pos.xz + oc);
+	vec3 e1 = vec3(ob.x, hb - h, ob.y);
+	vec3 e2 = vec3(oc.x, hc - h, oc.y);
+	vec3 n = cross(e2, e1);
+	if (n.y < 0.0) {
+		n = -n; // the surface is a heightfield: the face normal always points up
+	}
+	v_normal = n;
 }
 
 void fragment() {
-	// Flat face normals (see the NaN note in the old fork: only use the derived normal when valid).
-	vec3 face_cross = cross(dFdy(VERTEX), dFdx(VERTEX));
-	if (dot(face_cross, face_cross) > 1e-12) {
-		NORMAL = normalize(face_cross);
-	}
+	// Flat face normal from the vertex stage (world space -> view space). Same for both faces:
+	// seen from below it is deliberately the upward surface normal, so the underside is lit
+	// like the top.
+	NORMAL = normalize((VIEW_MATRIX * vec4(normalize(v_normal), 0.0)).xyz);
 
 	// Depth -> shallow/deep blend and foam. NDC depth range differs per backend.
 	float depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
@@ -86,14 +104,12 @@ void fragment() {
 
 	float depth_blend = clamp(water_depth / depth_distance, 0.0, 1.0);
 	vec3 water_base = mix(shallow_water_color, deep_water_color, depth_blend);
-	float dynamic_alpha = mix(water_alpha * 0.3, water_alpha, depth_blend);
+	float dynamic_alpha = mix(water_alpha, water_alpha, depth_blend);
 
-	// Seen from below: the derived normal faces the camera (i.e. down), so the sun lit it from
-	// behind and it went black. Flip it so it is lit like the top, and keep it mostly clear so
-	// the sky / world above stays visible.
+	// Seen from below: keep it mostly clear so the sky / world above stays visible. (The normal
+	// is already the upward one, so it is lit like the top -- no flip needed.)
 	bool underside = !FRONT_FACING;
 	if (underside) {
-		NORMAL = -NORMAL;
 		dynamic_alpha = water_alpha * underwater_alpha;
 	}
 

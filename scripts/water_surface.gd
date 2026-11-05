@@ -277,40 +277,53 @@ func _follow_camera() -> void:
 
 func _build_grid_mesh() -> ArrayMesh:
 	var cells := _half * 2
-	var n := cells + 1
-	var verts := PackedVector3Array()
-	verts.resize(n * n)
-	for row in n:
-		for col in n:
-			verts[row * n + col] = Vector3((col - _half) * cell_size, 0.0, (row - _half) * cell_size)
 
+	# UN-INDEXED on purpose: every triangle owns its three vertices, and each vertex carries the XZ
+	# offsets to the other two corners of ITS triangle (UV = next corner, UV2 = the one after,
+	# cyclic). The shader uses that to compute the flat face normal analytically, identical on all
+	# three vertices -- no screen-space derivatives, so no artifacts at triangle edges.
 	# Per quad: a=(col,row) b=(col+1,row) c=(col,row+1) d=(col+1,row+1), diagonal a-d.
-	# Triangles (a,b,d) and (a,d,c) -- clockwise seen from above, i.e. front-facing up.
-	# height_at() relies on exactly this split.
-	var indices := PackedInt32Array()
-	indices.resize(cells * cells * 6)
+	# Triangles (a,b,d) and (a,d,c). height_at() relies on exactly this split.
+	var tri_count := cells * cells * 2
+	var verts := PackedVector3Array()
+	var uv_next := PackedVector2Array()
+	var uv_after := PackedVector2Array()
+	verts.resize(tri_count * 3)
+	uv_next.resize(tri_count * 3)
+	uv_after.resize(tri_count * 3)
+
 	var w := 0
 	for row in cells:
 		for col in cells:
-			var a := row * n + col
-			var b := a + 1
-			var c := a + n
-			var d := c + 1
-			indices[w] = a
-			indices[w + 1] = b
-			indices[w + 2] = d
-			indices[w + 3] = a
-			indices[w + 4] = d
-			indices[w + 5] = c
-			w += 6
+			var a := Vector2(col - _half, row - _half) * cell_size
+			var b := a + Vector2(cell_size, 0.0)
+			var c := a + Vector2(0.0, cell_size)
+			var d := a + Vector2(cell_size, cell_size)
+			w = _write_triangle(verts, uv_next, uv_after, w, a, b, d)
+			w = _write_triangle(verts, uv_next, uv_after, w, a, d, c)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_TEX_UV] = uv_next
+	arrays[Mesh.ARRAY_TEX_UV2] = uv_after
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var ext := _half * cell_size
 	var m := max_amplitude() + 1.0
 	mesh.custom_aabb = AABB(Vector3(-ext, -m, -ext), Vector3(ext * 2.0, m * 2.0, ext * 2.0))
 	return mesh
+
+
+## Writes one triangle (p0,p1,p2 as lattice XZ) at index `w`; returns the next free index.
+func _write_triangle(verts: PackedVector3Array, uv_next: PackedVector2Array, uv_after: PackedVector2Array, w: int, p0: Vector2, p1: Vector2, p2: Vector2) -> int:
+	verts[w] = Vector3(p0.x, 0.0, p0.y)
+	uv_next[w] = p1 - p0
+	uv_after[w] = p2 - p0
+	verts[w + 1] = Vector3(p1.x, 0.0, p1.y)
+	uv_next[w + 1] = p2 - p1
+	uv_after[w + 1] = p0 - p1
+	verts[w + 2] = Vector3(p2.x, 0.0, p2.y)
+	uv_next[w + 2] = p0 - p2
+	uv_after[w + 2] = p1 - p2
+	return w + 3
