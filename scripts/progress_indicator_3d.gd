@@ -12,6 +12,13 @@ class_name ProgressIndicator3D
 @onready var sprite: Sprite3D = $Sprite3D
 @onready var viewport: SubViewport = $Sprite3D/SubViewport
 @onready var bar: ProgressBar = $Sprite3D/SubViewport/ProgressBar
+@onready var value_label: Label3D = $Label3D
+
+## Show the number (0-100) over the bar. Off by default (construction sites / trees); the nameplate's health and energy bars turn it on.
+@export var show_value := false:
+	set(value):
+		show_value = value
+		_apply_value_visibility()
 
 @export var bar_color: Color = Color(0.4, 0.8, 0.3, 1): # matches citizen HappinessBar fill green
 	set(value):
@@ -32,6 +39,7 @@ func _ready() -> void:
 	_bg_style = _private_copy("background")
 	_fill_style.bg_color = bar_color
 	_bg_style.bg_color = bg_color
+	_apply_value_visibility()
 
 func _private_copy(style_name: String) -> StyleBoxFlat:
 	var original := bar.get_theme_stylebox(style_name) as StyleBoxFlat
@@ -41,6 +49,11 @@ func _private_copy(style_name: String) -> StyleBoxFlat:
 
 func set_progress(value01: float) -> void:
 	bar.value = clamp(value01, 0.0, 1.0)
+	value_label.text = str(roundi(bar.value * 100.0))
+
+func _apply_value_visibility() -> void:
+	if is_node_ready():
+		value_label.visible = show_value and sprite.visible
 
 # Changes the fill color after the fact -- used by construction sites to
 # flag "stalled, missing resources" (e.g. a red/orange tint) without needing
@@ -52,6 +65,7 @@ func set_bar_color(new_color: Color) -> void:
 
 func set_visible_in_range(in_range: bool) -> void:
 	sprite.visible = in_range
+	_apply_value_visibility()
 	viewport.render_target_update_mode = (
 		SubViewport.UPDATE_ALWAYS if in_range else SubViewport.UPDATE_DISABLED
 	)

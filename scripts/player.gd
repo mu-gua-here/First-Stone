@@ -5,6 +5,16 @@ extends Carrier
 @export var nameplate: Nameplate
 ## The capsule you are drawn as; Network tints it with your player colour
 @export var body_mesh: MeshInstance3D
+## "[E] Grab" prompt shown near small pick-up items (fruit); a Label in player.tscn
+@export var grab_hint: Label
+const GRAB_REACH := 1.8
+const TAKE_LOG_HOLD := 0.8 # seconds E must be held on a woodpile log to take it
+var _take_hold_start := -1 # msec when the current hold began (-1 = not holding)
+var _pile_hover: ResourceProp # the woodpile log under the crosshair, outlined
+var _pile_hover_meshes: Array[MeshInstance3D] = []
+var _outline_material: Material # borrowed from the CitizenSelector so both outlines look the same
+var _held_props: Array = [] # ResourceProps carried overhead, oldest first (up to ResourceProp.MAX_CARRY)
+var _held_prop_names: Array = [] # online client: names of the props the server let us pick up (some still optimistic)
 
 func set_body_color(color: Color) -> void:
 	var base := body_mesh.get_active_material(0)
@@ -24,14 +34,15 @@ var spawn_point: Vector3
 
 @export_category("Devmode")
 @export var dev_mode := false
-@export var DEV_SPEED := 4.0
-@export var DEV_RUN_SPEED := 8.0
+@export var DEV_SPEED := 10.0
+@export var DEV_RUN_SPEED := 16.0
+@export var DEV_ACCEL := 10.0 # how quickly dev-mode flight eases to the wanted speed (higher = snappier)
 
 # Player physical movement
 @export_category("Physics")
 @export var SPEED := 4.0
 @export var RUN_SPEED := 6.0
-@export var SWIM_SPEED := 0.25
+@export var SWIM_SPEED := 0.5
 @export var JUMP_HEIGHT := 7.0
 ## Hold jump to keep accelerating upward (up to JUMP_HOLD_TIME seconds). Letting go just stops adding
 ## acceleration -- you keep the upward speed you have and gravity takes over, you are NOT stopped.
@@ -40,12 +51,11 @@ var spawn_point: Vector3
 var _jumping := false # true while rising from a jump the player started (so the walking hop isn't boosted)
 var _jump_held_for := 0.0
 @export var FRICTION := 0.8
-@export var WATER_RESISTANCE := 0.95
 @export var BOUNCE_HEIGHT := 5.0
 var bounce_active := false
 
 @export_category("Mechanics")
-@export var hunger_dmg := 0.2
+@export var hunger_dmg := 0.01
 
 # Player physiological settings. health / max_health / fall damage / dying live in Carrier (shared with
 # citizens). Assign to energy directly -- the setter clamps and emits energy_changed.
@@ -88,12 +98,13 @@ func _ready():
 	_carrier_ready() # sets `builder` (see carrier.gd)
 
 func _physics_process(delta: float) -> void:
+	_update_grab()
 	
 	if not dev_mode:
 		_apply_gravity(delta) # see carrier.gd -- gradual sink in water, normal gravity on land
 	
-	# Cached: is_in_fluid() samples the water height
-	var in_fluid := is_in_fluid()
+	# Cached: is_in_fluid() samples the water height. Dev mode is a free-fly cam, so water doesn't touch it.
+	var in_fluid := is_in_fluid() and not dev_mode
 	
 	# (gravity / sinking is applied at the top by _apply_gravity())
 	
@@ -143,8 +154,13 @@ func _physics_process(delta: float) -> void:
 	# piling onto velocity, so outside impacts can be steered against and decay normally.
 	var wanted := Vector3(direction.x, 0.0, direction.z) * speed * (vitality_mult if dev_mode else 1.0)
 
-	# Send to carrier.gd to incorporate horizontal physics
-	steer_horizontal(wanted, delta)
+	if dev_mode:
+		# Free-fly: ease straight toward the wanted 3D velocity. (The old `velocity *= FRICTION` every physics
+		# tick fought the steering and left dev mode crawling.)
+		velocity = velocity.lerp(direction * speed, 1.0 - exp(-DEV_ACCEL * delta))
+	else:
+		# Send to carrier.gd to incorporate horizontal physics
+		steer_horizontal(wanted, delta)
 	
 	if in_fluid:
 		# Scaled by vertical/horizontal drag so top swim speed is unchanged now that vertical drag is weaker.
@@ -154,20 +170,16 @@ func _physics_process(delta: float) -> void:
 		energy -= move_energy * delta
 	
 	# Small bounce animation while walking (skipped on the frame a jump already set velocity.y)
-	if is_on_floor():
+	if is_on_floor() and not dev_mode:
 		if input_dir != Vector2.ZERO and not just_jumped:
 			if not in_fluid or up_down >= 0.0:
-				var temp_vel = (BOUNCE_HEIGHT - (2.0 * WATER_RESISTANCE if in_fluid else 0.0)) * vitality_mult
+				var temp_vel = BOUNCE_HEIGHT * vitality_mult
 				if temp_vel >= 2.0:
 					velocity.y += temp_vel
 					bounce_active = true
 	
-	if dev_mode: velocity *= FRICTION
-	
-	if in_fluid: velocity *= WATER_RESISTANCE
-	
 	# Start eating away at health once at critical levels
-	if energy < 30.0:
+	if energy < 0.1:
 		health -= hunger_dmg * delta
 	
 	# Knockback from attackers, decaying over time
@@ -201,6 +213,29 @@ func _physics_process(delta: float) -> void:
 		energy -= heal_energy * delta
 	
 	energy -= metabolism * delta
+	_update_eating(delta)
+
+# --- Eating ---
+# Standing at the stockpile while hungry (energy below Builder.hungry_below) eats its food one bite at a time, until
+# Builder.eat_until. Only offline / on the host for now: an online client's stockpile is a copy of the server's, so
+# eating there needs a request to the server (like req_build).
+const EAT_BITE_INTERVAL := 0.8
+var _eat_bite_timer := 0.0
+var _is_eating := false
+
+func _update_eating(delta: float) -> void:
+	if builder == null or Globals.online_client or dev_mode:
+		return
+	_eat_bite_timer -= delta
+	if _eat_bite_timer > 0.0:
+		return
+	var hungry:bool = energy < (builder.eat_until if _is_eating else builder.hungry_below)
+	if not hungry or not builder.has_food() or not builder.is_at_food_store(global_position):
+		_is_eating = false
+		return
+	_is_eating = true
+	_eat_bite_timer = EAT_BITE_INTERVAL
+	energy += builder.take_food()
 
 # Called by attackers (e.g. angry citizens). Ignored while invulnerable.
 func take_damage(amount: float, source_position: Vector3 = global_position, knockback_force: float = 4.0) -> void:
@@ -224,6 +259,164 @@ func _on_death() -> void:
 	energy = max_energy
 	is_dead = false
 	
+## Small items (fruit) can't be shoved around reliably, so E picks one up and stacks it overhead; keep pressing E to
+## carry up to ResourceProp.MAX_CARRY at once, and Q drops the top one. Fruit counts once it lies in the food stockpile. Offline / on the host the props are simulated here and
+## moved directly; an online client asks the server instead (WorldSync.req_prop_grab) and sees the props follow it.
+func _update_grab() -> void:
+	if builder == null:
+		_set_grab_hint("")
+		return
+	if Globals.online_client:
+		_update_grab_online()
+		return
+	for i in range(_held_props.size() - 1, -1, -1):
+		var held_prop := _held_props[i] as ResourceProp
+		if not is_instance_valid(held_prop) or held_prop.collected:
+			_held_props.remove_at(i) # collected / gone: the stack closes up
+	for i in _held_props.size():
+		(_held_props[i] as ResourceProp).global_position = global_position + ResourceProp.carry_offset(i)
+	var aimed := _aimed_pile_log()
+	_set_pile_outline(aimed)
+	if Input.is_action_just_pressed("drop") and not _held_props.is_empty():
+		var top := _held_props.pop_back() as ResourceProp
+		top.release(Vector3(velocity.x, 0.0, velocity.z))
+	if aimed != null:
+		_update_log_theft(aimed) # looking at a log on the woodpile: E is for taking it
+		return
+	_take_hold_start = -1
+	var full := _held_props.size() >= ResourceProp.MAX_CARRY
+	var nearest: ResourceProp = null if full else _nearest_grabbable(false)
+	var drop_hint := "   [Q] Drop" if not _held_props.is_empty() else ""
+	if nearest != null:
+		_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
+		if Input.is_action_just_pressed("grab"):
+			nearest.grab()
+			_held_props.append(nearest)
+	elif not _held_props.is_empty():
+		if full:
+			_set_grab_hint("Hands full (%d/%d) - [Q] Drop" % [_held_props.size(), ResourceProp.MAX_CARRY])
+		else:
+			_set_grab_hint("[Q] Drop (%d/%d)" % [_held_props.size(), ResourceProp.MAX_CARRY])
+	else:
+		_set_grab_hint("")
+
+## The log on the woodpile the player is looking at (the same mouse / crosshair ray the citizen selector uses), if it is
+## within work reach. Only offline / on the host: the server owns the pile.
+func _aimed_pile_log() -> ResourceProp:
+	if Globals.online_client:
+		return null
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return null
+	var screen_pos := Globals.aim_position()
+	var from := camera.project_ray_origin(screen_pos)
+	var query := PhysicsRayQueryParameters3D.create(from, from + camera.project_ray_normal(screen_pos) * 60.0)
+	query.collide_with_bodies = true
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var prop := hit.get("collider") as ResourceProp
+	if prop == null or not prop.in_pile or prop.collected:
+		return null
+	if Builder.flat_distance(prop.global_position, global_position) > Builder.PLAYER_WORK_REACH:
+		return null
+	return prop
+
+## Hold E on an aimed log to take it off the pile: it pops out loose towards the player.
+func _update_log_theft(prop: ResourceProp) -> void:
+	if not Input.is_action_pressed("grab"):
+		_take_hold_start = -1
+		_set_grab_hint("[Hold E] Take log")
+		return
+	var now := Time.get_ticks_msec()
+	if _take_hold_start < 0:
+		_take_hold_start = now
+	var t := float(now - _take_hold_start) / (TAKE_LOG_HOLD * 1000.0)
+	if t >= 1.0:
+		_take_hold_start = -1
+		builder.take_log_from_pile(prop, global_position)
+		_set_pile_outline(null)
+	else:
+		_set_grab_hint("Taking log... %d%%" % int(t * 100.0))
+
+func _set_pile_outline(target: ResourceProp) -> void:
+	if target == _pile_hover:
+		return
+	for mesh in _pile_hover_meshes:
+		if is_instance_valid(mesh):
+			mesh.material_overlay = null
+	_pile_hover_meshes.clear()
+	_pile_hover = target
+	if _outline_material == null:
+		var selector := get_tree().root.find_child("CitizenSelector", true, false) # same yellow overlay it uses
+		if selector != null:
+			_outline_material = selector.get("outline_material")
+	if target == null or _outline_material == null:
+		return
+	for node in target.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		mesh.material_overlay = _outline_material
+		_pile_hover_meshes.append(mesh)
+
+## The closest small prop within GRAB_REACH that can be picked up (logs are big enough to push, so they are skipped).
+## On a client every prop is a puppet of the server's, which has the final say (can_be_grabbed) anyway.
+func _nearest_grabbable(is_client: bool) -> ResourceProp:
+	var nearest: ResourceProp = null
+	var best := GRAB_REACH * GRAB_REACH
+	for node in get_tree().get_nodes_in_group("resource_prop"):
+		var prop := node as ResourceProp
+		if prop == null or prop.collected:
+			continue
+		if not is_client and (prop.held or prop.is_puppet):
+			continue
+		if is_client and _held_prop_names.has(String(prop.name)):
+			continue # already on our stack
+		if builder.is_stacked_type(String(prop.get_meta("resource_type", ""))):
+			continue
+		var d := global_position.distance_squared_to(prop.global_position)
+		if d < best:
+			best = d
+			nearest = prop
+	return nearest
+
+func _update_grab_online() -> void:
+	var sync = Globals.world_sync
+	if sync == null:
+		_set_grab_hint("")
+		return
+	if not sync.grab_result.is_connected(_on_grab_result):
+		sync.grab_result.connect(_on_grab_result)
+	for i in range(_held_prop_names.size() - 1, -1, -1):
+		var held := builder.get_node_or_null(NodePath(String(_held_prop_names[i]))) as ResourceProp
+		if held == null or held.collected:
+			_held_prop_names.remove_at(i) # it was collected (or is gone)
+	var full := _held_prop_names.size() >= ResourceProp.MAX_CARRY
+	var nearest: ResourceProp = null if full else _nearest_grabbable(true)
+	if Input.is_action_just_pressed("drop") and not _held_prop_names.is_empty():
+		sync.req_prop_grab(String(_held_prop_names.pop_back()), false)
+	var drop_hint := "   [Q] Drop" if not _held_prop_names.is_empty() else ""
+	if nearest != null:
+		_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_prop_names.size(), ResourceProp.MAX_CARRY, drop_hint])
+		if Input.is_action_just_pressed("grab"):
+			sync.req_prop_grab(String(nearest.name), true)
+			_held_prop_names.append(String(nearest.name)) # optimistic; _on_grab_result removes it if the server said no
+	elif not _held_prop_names.is_empty():
+		if full:
+			_set_grab_hint("Hands full (%d/%d) - [Q] Drop" % [_held_prop_names.size(), ResourceProp.MAX_CARRY])
+		else:
+			_set_grab_hint("[Q] Drop (%d/%d)" % [_held_prop_names.size(), ResourceProp.MAX_CARRY])
+	else:
+		_set_grab_hint("")
+
+func _on_grab_result(prop_name: String, ok: bool) -> void:
+	if not ok:
+		_held_prop_names.erase(prop_name)
+
+func _set_grab_hint(text: String) -> void:
+	if grab_hint == null:
+		return
+	grab_hint.visible = text != ""
+	grab_hint.text = text
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	if event.keycode == KEY_F8 and not (event is InputEventKey and event.pressed and not event.echo):
 		dev_mode = not dev_mode
@@ -301,7 +494,7 @@ func _update_gathering(delta: float) -> void:
 		return
 	
 	# Wandered out of reach while holding -- stop rather than gathering at a distance.
-	if _flat_distance_to(builder.get_structure_position(gather_target_id)) > Builder.PLAYER_WORK_REACH:
+	if _flat_distance_to(builder.get_structure_position(gather_target_id)) > builder.get_gather_reach(gather_target_id):
 		_stop_gathering()
 		return
 	
@@ -361,7 +554,7 @@ func _raycast_target_in_reach(screen_pos: Vector2) -> Dictionary:
 	# is a miss rather than letting the click fall through to something behind it.
 	var object_id: String = builder.pick_object_at(screen_pos)
 	if object_id != NO_ID:
-		if _flat_distance_to(builder.get_structure_position(object_id)) <= Builder.PLAYER_WORK_REACH:
+		if _flat_distance_to(builder.get_structure_position(object_id)) <= builder.get_gather_reach(object_id):
 			return {"id": object_id, "is_site": false}
 		return none
 	

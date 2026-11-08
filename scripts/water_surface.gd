@@ -246,6 +246,7 @@ func _push_waves() -> void:
 		wave_a.append(Vector4(_dirs[i].x, _dirs[i].y, _ks[i], amplitudes[i]))
 	_active_material.set_shader_parameter("wave_a", wave_a)
 	_active_material.set_shader_parameter("wave_phase", Vector4(_phases[0], _phases[1], _phases[2], _phases[3]))
+	_active_material.set_shader_parameter("quad_size", cell_size)
 
 
 func _get_camera() -> Node3D:
@@ -278,19 +279,18 @@ func _follow_camera() -> void:
 func _build_grid_mesh() -> ArrayMesh:
 	var cells := _half * 2
 
-	# UN-INDEXED on purpose: every triangle owns its three vertices, and each vertex carries the XZ
-	# offsets to the other two corners of ITS triangle (UV = next corner, UV2 = the one after,
-	# cyclic). The shader uses that to compute the flat face normal analytically, identical on all
-	# three vertices -- no screen-space derivatives, so no artifacts at triangle edges.
+	# UN-INDEXED on purpose: every tile (quad) owns its six vertices (two triangles), and each vertex
+	# carries in UV the XZ offset from itself to its tile's (col,row) corner. The shader uses that to
+	# compute ONE flat normal per tile analytically, identical on all six vertices -- no screen-space
+	# derivatives, so no artifacts at triangle edges, and each tile shades as a single quad.
+	# Set cell_size equal to the GridMap cell size and the ocean tiles line up with the land tiles.
 	# Per quad: a=(col,row) b=(col+1,row) c=(col,row+1) d=(col+1,row+1), diagonal a-d.
 	# Triangles (a,b,d) and (a,d,c). height_at() relies on exactly this split.
 	var tri_count := cells * cells * 2
 	var verts := PackedVector3Array()
-	var uv_next := PackedVector2Array()
-	var uv_after := PackedVector2Array()
+	var uv_to_corner := PackedVector2Array()
 	verts.resize(tri_count * 3)
-	uv_next.resize(tri_count * 3)
-	uv_after.resize(tri_count * 3)
+	uv_to_corner.resize(tri_count * 3)
 
 	var w := 0
 	for row in cells:
@@ -299,14 +299,13 @@ func _build_grid_mesh() -> ArrayMesh:
 			var b := a + Vector2(cell_size, 0.0)
 			var c := a + Vector2(0.0, cell_size)
 			var d := a + Vector2(cell_size, cell_size)
-			w = _write_triangle(verts, uv_next, uv_after, w, a, b, d)
-			w = _write_triangle(verts, uv_next, uv_after, w, a, d, c)
+			w = _write_triangle(verts, uv_to_corner, w, a, a, b, d)
+			w = _write_triangle(verts, uv_to_corner, w, a, a, d, c)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_TEX_UV] = uv_next
-	arrays[Mesh.ARRAY_TEX_UV2] = uv_after
+	arrays[Mesh.ARRAY_TEX_UV] = uv_to_corner
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var ext := _half * cell_size
@@ -315,15 +314,12 @@ func _build_grid_mesh() -> ArrayMesh:
 	return mesh
 
 
-## Writes one triangle (p0,p1,p2 as lattice XZ) at index `w`; returns the next free index.
-func _write_triangle(verts: PackedVector3Array, uv_next: PackedVector2Array, uv_after: PackedVector2Array, w: int, p0: Vector2, p1: Vector2, p2: Vector2) -> int:
+## Writes one triangle (p0,p1,p2 as lattice XZ) of the tile whose corner is `quad_a`, at index `w`; returns the next free index.
+func _write_triangle(verts: PackedVector3Array, uv_to_corner: PackedVector2Array, w: int, quad_a: Vector2, p0: Vector2, p1: Vector2, p2: Vector2) -> int:
 	verts[w] = Vector3(p0.x, 0.0, p0.y)
-	uv_next[w] = p1 - p0
-	uv_after[w] = p2 - p0
+	uv_to_corner[w] = quad_a - p0
 	verts[w + 1] = Vector3(p1.x, 0.0, p1.y)
-	uv_next[w + 1] = p2 - p1
-	uv_after[w + 1] = p0 - p1
+	uv_to_corner[w + 1] = quad_a - p1
 	verts[w + 2] = Vector3(p2.x, 0.0, p2.y)
-	uv_next[w + 2] = p0 - p2
-	uv_after[w + 2] = p1 - p2
+	uv_to_corner[w + 2] = quad_a - p2
 	return w + 3

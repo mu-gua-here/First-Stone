@@ -1,0 +1,72 @@
+[gd_scene format=3 uid="uid://bk6elpugdvc5"]
+
+[ext_resource type="PackedScene" uid="uid://dejdfmdyepv2l" path="res://scenes/stockpile_sign.tscn" id="1_base"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_board"]
+albedo_color = Color(0.3, 0.55, 0.22, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_trim"]
+albedo_color = Color(0.12, 0.28, 0.1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_apple"]
+albedo_color = Color(0.85, 0.15, 0.12, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_apple"]
+material = SubResource("StandardMaterial3D_apple")
+radius = 0.15
+height = 0.3
+radial_segments = 8
+rings = 4
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_orange"]
+albedo_color = Color(0.95, 0.55, 0.12, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_orange"]
+material = SubResource("StandardMaterial3D_orange")
+radius = 0.15
+height = 0.3
+radial_segments = 8
+rings = 4
+
+[node name="FoodStockpileSign" unique_id=1706543210 instance=ExtResource("1_base")]
+
+[node name="Board" parent="." index="3" unique_id=567657592]
+material_override = SubResource("StandardMaterial3D_board")
+
+[node name="TopTrim" parent="." index="4" unique_id=1718239591]
+material_override = SubResource("StandardMaterial3D_trim")
+
+[node name="FrontTitle" parent="." index="5" unique_id=1366897750]
+transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 2.1504443, 0.08)
+text = "FOOD
+STOCKPILE"
+
+[node name="FrontCount" parent="." index="6" unique_id=565081314]
+transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 1.5963433, 0.08)
+text = "Fruit only"
+
+[node name="BackTitle" parent="." index="7" unique_id=1082577721]
+text = "FOOD STORE"
+
+[node name="BackCount" parent="." index="8" unique_id=153885117]
+text = "Fruit only"
+
+[node name="Fruit1" type="MeshInstance3D" parent="." index="9" unique_id=1523492769]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 2.93, 0)
+mesh = SubResource("SphereMesh_apple")
+
+[node name="Fruit2" type="MeshInstance3D" parent="." index="10" unique_id=776094878]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.5, 2.93, 0)
+mesh = SubResource("SphereMesh_orange")
+
+[node name="Fruit3" type="MeshInstance3D" parent="." index="11" unique_id=557710597]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.93, 0)
+mesh = SubResource("SphereMesh_apple")
+
+[node name="Fruit4" type="MeshInstance3D" parent="." index="12" unique_id=2147336041]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 2.93, 0)
+mesh = SubResource("SphereMesh_orange")
+
+[node name="Fruit5" type="MeshInstance3D" parent="." index="13" unique_id=190178400]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 2.93, 0)
+mesh = SubResource("SphereMesh_apple")

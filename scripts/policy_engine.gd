@@ -34,6 +34,14 @@ const _CITIZEN_FIELDS := {
 	"job_satisfaction": "_get_citizen_job_satisfaction",
 	"housing_satisfaction": "_get_citizen_housing_satisfaction",
 	"approval": "_get_citizen_approval",
+	# Situation fields the default traditions read (see citizen.gd). Booleans/strings the engine derives for the
+	# citizen so a rule can say "WHEN [Hungry] is [true]" without knowing any thresholds.
+	"hungry": "_get_citizen_hungry",            # energy below Builder.hungry_below
+	"food_available": "_get_citizen_food_available", # the stockpile has food
+	"eat_ready": "_get_citizen_eat_ready",       # not already eating, not mid-shove, not sulking after giving up
+	"busy": "_get_citizen_busy",                 # chopping, building, pushing a log or eating
+	"wander_ready": "_get_citizen_wander_ready", # the idle timer ran out
+	"task": "_get_citizen_task",                 # "idle", "gathering", "building", "pushing", "hauling", "eating"
 }
 
 const _BUILDING_FIELDS := {
@@ -148,6 +156,16 @@ func _get_citizen_job(citizen): return citizen.data.job
 func _get_citizen_job_satisfaction(citizen): return citizen.data.job_satisfaction
 func _get_citizen_housing_satisfaction(citizen): return citizen.data.housing_satisfaction
 func _get_citizen_approval(citizen): return citizen.data.approval
+func _get_citizen_hungry(citizen):
+	var b = _builder()
+	return b != null and citizen.data.energy < b.hungry_below
+func _get_citizen_food_available(_citizen):
+	var b = _builder()
+	return b != null and b.has_food()
+func _get_citizen_eat_ready(citizen): return citizen.eat_ready()
+func _get_citizen_busy(citizen): return citizen.is_busy()
+func _get_citizen_wander_ready(citizen): return citizen.wander_ready()
+func _get_citizen_task(citizen): return citizen.task_name()
 
 # BuildingInstance doesn't carry a back-reference to its Structure, so these
 # getters need the owning Builder to resolve structure_index -> Structure.
@@ -183,6 +201,11 @@ func _get_building_residential_floors(instance: BuildingInstance):
 
 # --- execute --------------------------------------------------------------
 
+## Why the most recent execute() was refused ("" if it wasn't, or no reason was given). The UI shows this to the
+## player in red, like the build cursor's "can't build here" messages. Online the server sends it back with its answer.
+var last_failure := ""
+const UNREACHABLE_PAUSE := 4.0 # seconds a citizen stands still after being sent somewhere they can't walk to
+
 ## Dispatches an Action against a subject. This routes through the EXISTING
 ## builder methods (has_housing_for, request_job, etc.) per the plan -- this
 ## milestone does not rewrite those, it's the single place both manual clicks
@@ -193,6 +216,16 @@ func _get_building_residential_floors(instance: BuildingInstance):
 ## uses it directly instead of searching via action.target_query. Policies
 ## (Milestone B) leave this null and let execute() search.
 func execute(action: Action, subject, resolved_target = null) -> bool:
+	last_failure = ""
+	var ok := _dispatch(action, subject, resolved_target)
+	# A task the player handed a citizen by hand: ordinary policies leave that citizen alone until it is done
+	# (survival policies such as eating still run). See Policy.survival and think().
+	if ok and resolved_target != null and _is_citizen(subject) and action != null \
+			and action.kind in [Action.Kind.ASSIGN_GATHER, Action.Kind.ASSIGN_BUILD_TASK, Action.Kind.ASSIGN_HAUL]:
+		subject.manual_task = true
+	return ok
+
+func _dispatch(action: Action, subject, resolved_target = null) -> bool:
 	if action == null or subject == null:
 		return false
 
@@ -213,6 +246,18 @@ func execute(action: Action, subject, resolved_target = null) -> bool:
 
 		Action.Kind.ASSIGN_BUILD_TASK:
 			return _execute_assign_build_task(b, subject, resolved_target)
+
+		Action.Kind.ASSIGN_HAUL:
+			return _execute_assign_haul(b, subject, resolved_target)
+
+		Action.Kind.EAT:
+			return _is_citizen(subject) and subject.has_method("start_eating") and subject.start_eating()
+
+		Action.Kind.WANDER:
+			if _is_citizen(subject) and subject.has_method("start_wander"):
+				subject.start_wander()
+				return true
+			return false
 
 	push_warning("PolicyEngine.execute: unhandled Action.Kind %s" % action.kind)
 	return false
@@ -299,6 +344,11 @@ func _execute_assign_gather(b, citizen, resolved_target = null) -> bool:
 	if not _is_citizen(citizen):
 		return false
 	if resolved_target is String and resolved_target != b.NO_ID:
+		if citizen.has_method("can_reach") and not citizen.can_reach(b.get_structure_position(resolved_target)):
+			last_failure = "That target is unreachable."
+			if citizen.has_method("stand_still"):
+				citizen.stand_still(UNREACHABLE_PAUSE)
+			return false
 		if citizen.has_method("_start_gathering_at"):
 			citizen._start_gathering_at(resolved_target)
 			return true
@@ -307,6 +357,77 @@ func _execute_assign_gather(b, citizen, resolved_target = null) -> bool:
 		citizen._start_gathering()
 		return true
 	return false
+
+## Standing task: push loose logs to the stockpile. resolved_target, when given, is the name of the log the
+## player clicked (it is hauled first); without one the citizen starts with the nearest loose log.
+## Always succeeds -- a hauler with no logs to move just waits for the choppers to make some.
+func _execute_assign_haul(_b, citizen, resolved_target = null) -> bool:
+	if not _is_citizen(citizen) or not citizen.has_method("_start_hauling"):
+		return false
+	citizen._start_hauling(resolved_target if resolved_target is String else "")
+	return true
+
+# --- Policies ---------------------------------------------------------------
+#
+# The active rule book, highest priority first. For now it only holds the Default Traditions below; the policy
+# editor will add / edit / disable entries here, and the whole list is plain Resources so it can be saved and sent
+# to clients. Citizens run on the server / offline only, so this never needs to exist on a client.
+
+var policies: Array[Policy] = []
+
+func _ready() -> void:
+	_install_default_traditions()
+
+func add_policy(policy: Policy) -> void:
+	policies.append(policy)
+	policies.sort_custom(func(a: Policy, b: Policy) -> bool: return a.priority > b.priority)
+
+## The settlement's starting rules ("Default Traditions" in the design doc): baseline survival and idling that every
+## new civilisation begins with, so the editor is never a blank canvas.
+func _install_default_traditions() -> void:
+	var eat_when: Array[Condition] = [
+		Condition.leaf("hungry", "==", true),
+		Condition.leaf("food_available", "==", true),
+		Condition.leaf("eat_ready", "==", true),
+	]
+	var eat := Policy.new()
+	eat.policy_name = "Eat when hungry"
+	eat.priority = 100
+	eat.survival = true
+	eat.is_default = true
+	eat.condition = Condition.op_and(eat_when)
+	eat.action = Action.new_eat()
+	add_policy(eat)
+
+	var wander_when: Array[Condition] = [
+		Condition.leaf("busy", "==", false),
+		Condition.leaf("wander_ready", "==", true),
+	]
+	var wander := Policy.new()
+	wander.policy_name = "Wander when idle"
+	wander.priority = 0
+	wander.is_default = true
+	wander.condition = Condition.op_and(wander_when)
+	wander.action = Action.new_wander()
+	add_policy(wander)
+
+## One decision for one citizen: the first enabled policy (highest priority first) whose condition matches and whose
+## action applies is run. While the citizen is on a task the player gave them by hand, only survival policies
+## are considered (`survival_only` does the same without a manual task: used between two logs, where only a bite to
+## eat is worth interrupting for). Returns true if some policy ran. Called by Citizen about twice a second.
+func think(citizen, survival_only: bool = false) -> bool:
+	if not _is_citizen(citizen):
+		return false
+	var saved_failure := last_failure # a policy that does not apply must not wipe the reason the HUD is about to show
+	var ran := false
+	for policy in policies:
+		if not policy.enabled or ((citizen.manual_task or survival_only) and not policy.survival):
+			continue
+		if evaluate(policy.condition, citizen) and _dispatch(policy.action, citizen):
+			ran = true
+			break
+	last_failure = saved_failure
+	return ran
 
 ## resolved_target, when given, is a specific construction site's String id
 ## (see Builder.construction_sites) the caller already picked (manual click

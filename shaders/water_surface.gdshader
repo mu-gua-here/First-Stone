@@ -38,10 +38,17 @@ uniform float fade_start = 100.0;
 uniform float fade_end = 150.0;
 uniform float edge_fog_max_strength : hint_range(0.0, 1.0) = 1.0;
 
+// Set by WaterSurface (its cell_size, which should equal the GridMap cell size so ocean quads = tiles).
+group_uniforms Quads;
+uniform float quad_size = 4.0;
+// 0 = every tile is one hard flat facet; 1 = fully smooth (normals point straight up). The low-poly
+// look wants a little of this so adjacent tiles blend softly instead of reading as sharp shards.
+uniform float facet_softness : hint_range(0.0, 1.0) = 0.35;
+
 uniform sampler2D depth_texture : hint_depth_texture, filter_linear_mipmap;
 
 varying vec3 v_world_pos;
-varying vec3 v_normal; // world-space flat face normal, identical on all 3 vertices of a triangle
+varying vec3 v_normal; // world-space flat QUAD normal, identical on all 6 vertices of a tile
 
 float wave_height(vec2 p) {
 	float h = 0.0;
@@ -59,23 +66,24 @@ void vertex() {
 	VERTEX.y += h;
 	v_world_pos = world_pos + vec3(0.0, h, 0.0);
 
-	// Flat normal computed ANALYTICALLY. The mesh is un-indexed and each vertex carries the XZ
-	// offsets to the other two corners of its own triangle (UV = next corner, UV2 = the one
-	// after, cyclic), so all three vertices of a triangle evaluate the same three heights and
-	// output the same normal. This replaces the old dFdx/dFdy(VERTEX) normal, which breaks on
-	// pixels at triangle edges (helper-lane / MSAA extrapolation) and, at high amplitude where
-	// neighbouring triangles differ a lot, lit those pixels white.
-	vec2 ob = UV;
-	vec2 oc = UV2;
-	float hb = wave_height(world_pos.xz + ob);
-	float hc = wave_height(world_pos.xz + oc);
-	vec3 e1 = vec3(ob.x, hb - h, ob.y);
-	vec3 e2 = vec3(oc.x, hc - h, oc.y);
-	vec3 n = cross(e2, e1);
+	// One flat normal PER QUAD (grid tile), computed ANALYTICALLY. The mesh is un-indexed and every
+	// vertex carries UV = the XZ offset from itself to its tile's (col,row) corner `a`, so all six
+	// vertices of a tile evaluate the same four corner heights and output the same normal (still no
+	// dFdx/dFdy, which lit triangle-edge pixels white at high amplitude). The normal is the cross of
+	// the tile's two diagonals -- the best-fit plane of the four corners -- so the two triangles that
+	// make the tile shade as a single quad.
+	vec2 a = world_pos.xz + UV;
+	float ha = wave_height(a);
+	float hb = wave_height(a + vec2(quad_size, 0.0));
+	float hc = wave_height(a + vec2(0.0, quad_size));
+	float hd = wave_height(a + vec2(quad_size, quad_size));
+	vec3 diag_ad = vec3(quad_size, hd - ha, quad_size);
+	vec3 diag_bc = vec3(-quad_size, hc - hb, quad_size);
+	vec3 n = normalize(cross(diag_bc, diag_ad));
 	if (n.y < 0.0) {
 		n = -n; // the surface is a heightfield: the face normal always points up
 	}
-	v_normal = n;
+	v_normal = normalize(mix(n, vec3(0.0, 1.0, 0.0), facet_softness));
 }
 
 void fragment() {

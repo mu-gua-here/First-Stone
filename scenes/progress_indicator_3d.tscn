@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://cpdydft7pmk55"]
 
 [ext_resource type="Script" uid="uid://cgvabl0q1sgw5" path="res://scripts/progress_indicator_3d.gd" id="1_pi3d"]
+[ext_resource type="FontFile" uid="uid://d0cxd77jybrcn" path="res://fonts/lilita_one_regular.ttf" id="2_6aa2q"]
 
 [sub_resource type="ViewportTexture" id="ViewportTexture_7d2os"]
 viewport_path = NodePath("Sprite3D/SubViewport")
@@ -27,11 +28,20 @@ corner_radius_bottom_left = 6
 [node name="ProgressIndicator3D" type="Node3D" unique_id=661065465]
 script = ExtResource("1_pi3d")
 
+[node name="Label3D" type="Label3D" parent="." unique_id=1664640455]
+billboard = 2
+no_depth_test = true
+render_priority = 127
+outline_render_priority = 126
+text = "100"
+font = ExtResource("2_6aa2q")
+font_size = 100
+
 [node name="Sprite3D" type="Sprite3D" parent="." unique_id=1002025196]
 pixel_size = 0.02
 billboard = 2
 no_depth_test = true
-render_priority = 127
+render_priority = 125
 texture = SubResource("ViewportTexture_7d2os")
 
 [node name="SubViewport" type="SubViewport" parent="Sprite3D" unique_id=1052447099]

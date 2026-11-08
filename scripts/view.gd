@@ -62,6 +62,16 @@ const CAMERA_FOLLOW := 10.0
 @export var first_person_distance := 1.5
 @export var first_person_hysteresis := 0.5
 @export var eye_height := 0.6 # eyes above the target origin
+## How far in front of the player's centre the eyes sit (metres, along the view direction on the ground plane). Needs to be a
+## little more than the body's radius so the camera is outside the player mesh and you still see your own body.
+@export var eye_forward := 0.6
+## Hide the player's body in first person (off: the body stays visible, the camera just sits in front of it)
+@export var hide_body_in_first_person := false
+## While the player's eyes are inside a tree's canopy (its "Springarm" collider), that tree no longer pushes the camera in
+## (which used to cut to first person inside the leaves), and if the camera was in first person it backs out to this zoom.
+@export var canopy_exit_zoom := 3.5
+@export_flags_3d_physics var canopy_collision_mask := 8
+var _canopy_excluded: Array[RID] = []
 ## The player's visual (path relative to the target). Hidden in first person.
 @export var player_visual_path := NodePath("MeshInstance3D")
 ## Seconds the camera takes to glide between third person and the eyes.
@@ -134,12 +144,39 @@ func _physics_process(delta: float) -> void:
 			var forward_speed := Vector3(vel.x, 0.0, vel.z).dot(view_forward)
 			goal += view_forward * forward_speed * lag * lag_compensation * closeness
 	global_position = global_position.lerp(goal, follow_speed * delta)
+	_update_canopy()
+
+# Trees stop obstructing the camera while the player stands inside their canopy; first person inside leaves backs out
+func _update_canopy() -> void:
+	var params := PhysicsPointQueryParameters3D.new()
+	params.position = target.global_position + Vector3.UP * eye_height
+	params.collision_mask = canopy_collision_mask
+	params.collide_with_bodies = true
+	var inside: Array[RID] = []
+	for hit in get_world_3d().direct_space_state.intersect_point(params, 8):
+		var body := hit.get("collider") as Node
+		if body != null and body.get_parent() is Gatherable:
+			inside.append(hit["rid"])
+	for rid in _canopy_excluded:
+		if not inside.has(rid):
+			spring_arm.remove_excluded_object(rid)
+	var entered := false
+	for rid in inside:
+		if not _canopy_excluded.has(rid):
+			spring_arm.add_excluded_object(rid)
+			entered = true
+	_canopy_excluded = inside
+	if entered:
+		_held_length = INF # forget the short length the canopy had forced on the arm
+		_clear_time = 0.0
+	if not inside.is_empty() and zoom < canopy_exit_zoom and (_first_person or zoom < first_person_distance + first_person_hysteresis):
+		zoom = canopy_exit_zoom # snap out of first person; zoom back in yourself once you are clear of the tree
 
 func _process(delta: float) -> void:
 	# A browser gives the mouse back on Esc without telling us: follow it
 	if shift_locked and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		set_shift_lock(false)
-	camera.h_offset = lerpf(camera.h_offset, shift_lock_shoulder if shift_locked else 0.0, minf(delta * 10.0, 1.0))
+	camera.h_offset = lerpf(camera.h_offset, shift_lock_shoulder * (1.0 - smoothstep(0.0, 1.0, _fp_blend)) if shift_locked else 0.0, minf(delta * 10.0, 1.0)) # no over-the-shoulder slide in first person: it pushed the view off the body
 	# Lerp pure script variables using lerp_angle (NEVER read rotation_degrees!)
 	var lerp_weight = delta * 12.0
 	
@@ -163,10 +200,14 @@ func _process(delta: float) -> void:
 	_tp_pos = _clear_of_player(_tp_pos)
 	var cam_pos := _tp_pos
 	if _fp_blend > 0.0 and target != null:
-		# Glide between the third-person spot and the eyes instead of cutting
-		cam_pos = _tp_pos.lerp(target.global_position + Vector3.UP * eye_height, smoothstep(0.0, 1.0, _fp_blend))
+		# Glide between the third-person spot and the eyes instead of cutting. The eyes are a little in front of the body.
+		var look := -camera.global_basis.z
+		look.y = 0.0
+		look = look.normalized() if look.length_squared() > 0.0001 else Vector3.ZERO
+		var eyes := target.global_position + Vector3.UP * eye_height + look * eye_forward
+		cam_pos = _tp_pos.lerp(eyes, smoothstep(0.0, 1.0, _fp_blend))
 	camera.global_position = cam_pos
-	_set_player_visual_hidden(_fp_blend > 0.85)
+	_set_player_visual_hidden(hide_body_in_first_person and _fp_blend > 0.85)
 	
 	handle_input(delta)
 

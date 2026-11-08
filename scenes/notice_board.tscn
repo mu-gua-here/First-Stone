@@ -1,0 +1,146 @@
+[gd_scene format=3 uid="uid://t31ehsif5o42"]
+
+[ext_resource type="Script" uid="uid://cup5jw58nat7d" path="res://scripts/notice_board.gd" id="1_board"]
+[ext_resource type="FontFile" uid="uid://d0cxd77jybrcn" path="res://fonts/lilita_one_regular.ttf" id="2_font"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_post"]
+albedo_color = Color(0.3, 0.14, 0.1, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_post"]
+material = SubResource("Mat_post")
+size = Vector3(0.2, 2.6, 0.2)
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_rw1qp"]
+data = PackedVector3Array(-0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, 0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, -0.099999994, 1.3, -0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, 0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, 1.3, 0.099999994, -0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, 1.3, -0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, 0.099999994, -1.3, -0.099999994, -0.099999994, -1.3, -0.099999994)
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_rbmdp"]
+data = PackedVector3Array(-0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, 0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, -0.099999994, 1.3, -0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, 0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, 0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, 1.3, 0.099999994, -0.099999994, 1.3, 0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, 1.3, 0.099999994, -0.099999994, 1.3, -0.099999994, 0.099999994, 1.3, -0.099999994, -0.099999994, -1.3, 0.099999994, 0.099999994, -1.3, 0.099999994, -0.099999994, -1.3, -0.099999994, 0.099999994, -1.3, 0.099999994, 0.099999994, -1.3, -0.099999994, -0.099999994, -1.3, -0.099999994)
+
+[sub_resource type="StandardMaterial3D" id="Mat_board"]
+albedo_color = Color(0.45, 0.23, 0.16, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_board"]
+material = SubResource("Mat_board")
+size = Vector3(2.2, 1.5, 0.12)
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_l7kak"]
+data = PackedVector3Array(-1.1, 0.75, 0.06, 1.1, 0.75, 0.06, -1.1, -0.75, 0.06, 1.1, 0.75, 0.06, 1.1, -0.75, 0.06, -1.1, -0.75, 0.06, 1.1, 0.75, -0.06, -1.1, 0.75, -0.06, 1.1, -0.75, -0.06, -1.1, 0.75, -0.06, -1.1, -0.75, -0.06, 1.1, -0.75, -0.06, 1.1, 0.75, 0.06, 1.1, 0.75, -0.06, 1.1, -0.75, 0.06, 1.1, 0.75, -0.06, 1.1, -0.75, -0.06, 1.1, -0.75, 0.06, -1.1, 0.75, -0.06, -1.1, 0.75, 0.06, -1.1, -0.75, -0.06, -1.1, 0.75, 0.06, -1.1, -0.75, 0.06, -1.1, -0.75, -0.06, 1.1, 0.75, 0.06, -1.1, 0.75, 0.06, 1.1, 0.75, -0.06, -1.1, 0.75, 0.06, -1.1, 0.75, -0.06, 1.1, 0.75, -0.06, -1.1, -0.75, 0.06, 1.1, -0.75, 0.06, -1.1, -0.75, -0.06, 1.1, -0.75, 0.06, 1.1, -0.75, -0.06, -1.1, -0.75, -0.06)
+
+[sub_resource type="StandardMaterial3D" id="Mat_roof"]
+albedo_color = Color(0.72, 0.6, 0.32, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_roof"]
+material = SubResource("Mat_roof")
+size = Vector3(2.7, 0.1, 0.75)
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_dypi8"]
+data = PackedVector3Array(-1.35, 0.049999997, 0.375, 1.35, 0.049999997, 0.375, -1.35, -0.049999997, 0.375, 1.35, 0.049999997, 0.375, 1.35, -0.049999997, 0.375, -1.35, -0.049999997, 0.375, 1.35, 0.049999997, -0.375, -1.35, 0.049999997, -0.375, 1.35, -0.049999997, -0.375, -1.35, 0.049999997, -0.375, -1.35, -0.049999997, -0.375, 1.35, -0.049999997, -0.375, 1.35, 0.049999997, 0.375, 1.35, 0.049999997, -0.375, 1.35, -0.049999997, 0.375, 1.35, 0.049999997, -0.375, 1.35, -0.049999997, -0.375, 1.35, -0.049999997, 0.375, -1.35, 0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, -0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, -0.049999997, 0.375, -1.35, -0.049999997, -0.375, 1.35, 0.049999997, 0.375, -1.35, 0.049999997, 0.375, 1.35, 0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, 0.049999997, -0.375, 1.35, 0.049999997, -0.375, -1.35, -0.049999997, 0.375, 1.35, -0.049999997, 0.375, -1.35, -0.049999997, -0.375, 1.35, -0.049999997, 0.375, 1.35, -0.049999997, -0.375, -1.35, -0.049999997, -0.375)
+
+[sub_resource type="ConcavePolygonShape3D" id="ConcavePolygonShape3D_hiamg"]
+data = PackedVector3Array(-1.35, 0.049999997, 0.375, 1.35, 0.049999997, 0.375, -1.35, -0.049999997, 0.375, 1.35, 0.049999997, 0.375, 1.35, -0.049999997, 0.375, -1.35, -0.049999997, 0.375, 1.35, 0.049999997, -0.375, -1.35, 0.049999997, -0.375, 1.35, -0.049999997, -0.375, -1.35, 0.049999997, -0.375, -1.35, -0.049999997, -0.375, 1.35, -0.049999997, -0.375, 1.35, 0.049999997, 0.375, 1.35, 0.049999997, -0.375, 1.35, -0.049999997, 0.375, 1.35, 0.049999997, -0.375, 1.35, -0.049999997, -0.375, 1.35, -0.049999997, 0.375, -1.35, 0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, -0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, -0.049999997, 0.375, -1.35, -0.049999997, -0.375, 1.35, 0.049999997, 0.375, -1.35, 0.049999997, 0.375, 1.35, 0.049999997, -0.375, -1.35, 0.049999997, 0.375, -1.35, 0.049999997, -0.375, 1.35, 0.049999997, -0.375, -1.35, -0.049999997, 0.375, 1.35, -0.049999997, 0.375, -1.35, -0.049999997, -0.375, 1.35, -0.049999997, 0.375, 1.35, -0.049999997, -0.375, -1.35, -0.049999997, -0.375)
+
+[sub_resource type="StandardMaterial3D" id="Mat_paper"]
+albedo_color = Color(0.93, 0.87, 0.7, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_paper"]
+material = SubResource("Mat_paper")
+size = Vector3(0.5, 0.65, 0.02)
+
+[node name="NoticeBoard" type="Node3D" unique_id=1977849041]
+script = ExtResource("1_board")
+
+[node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=1187557063]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+radius = 1.5
+affect_navigation_mesh = true
+carve_navigation_mesh = true
+use_3d_avoidance = true
+
+[node name="PostLeft" type="MeshInstance3D" parent="." unique_id=1158525290]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.05, 1.3, 0)
+mesh = SubResource("Mesh_post")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="PostLeft" unique_id=1753605050]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PostLeft/StaticBody3D" unique_id=485158644]
+shape = SubResource("ConcavePolygonShape3D_rw1qp")
+
+[node name="PostRight" type="MeshInstance3D" parent="." unique_id=2133948294]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.05, 1.3, 0)
+mesh = SubResource("Mesh_post")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="PostRight" unique_id=1900706598]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PostRight/StaticBody3D" unique_id=726270157]
+shape = SubResource("ConcavePolygonShape3D_rbmdp")
+
+[node name="Board" type="MeshInstance3D" parent="." unique_id=1677020086]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.75, 0)
+mesh = SubResource("Mesh_board")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="Board" unique_id=1486925805]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Board/StaticBody3D" unique_id=502334225]
+shape = SubResource("ConcavePolygonShape3D_l7kak")
+
+[node name="RoofFront" type="MeshInstance3D" parent="." unique_id=954008671]
+transform = Transform3D(1, 0, 0, 0, 0.906, 0.4226, 0, -0.4226, 0.906, 0, 2.8, 0.22)
+mesh = SubResource("Mesh_roof")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="RoofFront" unique_id=1416634243]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="RoofFront/StaticBody3D" unique_id=2131454281]
+shape = SubResource("ConcavePolygonShape3D_dypi8")
+
+[node name="RoofBack" type="MeshInstance3D" parent="." unique_id=287126603]
+transform = Transform3D(1, 0, 0, 0, 0.906, -0.4226, 0, 0.4226, 0.906, 0, 2.8, -0.22)
+mesh = SubResource("Mesh_roof")
+
+[node name="StaticBody3D" type="StaticBody3D" parent="RoofBack" unique_id=1769891638]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="RoofBack/StaticBody3D" unique_id=474590272]
+shape = SubResource("ConcavePolygonShape3D_hiamg")
+
+[node name="FrontTitle" type="Label3D" parent="." unique_id=1540334924]
+transform = Transform3D(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 2.22, 0.08)
+pixel_size = 0.009
+modulate = Color(0.97, 0.9, 0.7, 1)
+outline_modulate = Color(0.18, 0.08, 0.05, 1)
+text = "NOTICES"
+font = ExtResource("2_font")
+font_size = 72
+outline_size = 14
+
+[node name="FrontNoticeLeft" type="MeshInstance3D" parent="." unique_id=1500202183]
+transform = Transform3D(0.99437845, 0.105884194, 0, -0.105884194, 0.99437845, 0, 0, 0, 1, -0.6035235, 1.6, 0.07)
+mesh = SubResource("Mesh_paper")
+
+[node name="FrontNoticeMiddle" type="MeshInstance3D" parent="." unique_id=881365245]
+transform = Transform3D(0.99442947, -0.10540417, 0, 0.10540417, 0.99442947, 0, 0, 0, 1, 0, 1.486045, 0.07)
+mesh = SubResource("Mesh_paper")
+
+[node name="FrontNoticeRight" type="MeshInstance3D" parent="." unique_id=1943987863]
+transform = Transform3D(0.9993338, 0.036496714, 0, -0.036496714, 0.9993338, 0, 0, 0, 1, 0.603151, 1.62, 0.07)
+mesh = SubResource("Mesh_paper")
+
+[node name="BackTitle" type="Label3D" parent="." unique_id=1374096315]
+transform = Transform3D(-0.5, 0, -4.371139e-08, 0, 0.5, 0, 4.371139e-08, 0, -0.5, 0, 2.22, -0.082245454)
+pixel_size = 0.009
+modulate = Color(0.97, 0.9, 0.7, 1)
+outline_modulate = Color(0.18, 0.08, 0.05, 1)
+text = "NOTICES"
+font = ExtResource("2_font")
+font_size = 72
+outline_size = 14
+
+[node name="BackNoticeLeft" type="MeshInstance3D" parent="." unique_id=1360690911]
+transform = Transform3D(-0.9943784, -0.105884194, -8.742278e-08, -0.105884194, 0.9943784, 0, 8.6931315e-08, 9.25669e-09, -1, -0.6035235, 1.6, -0.08167141)
+mesh = SubResource("Mesh_paper")
+
+[node name="BackNoticeMiddle" type="MeshInstance3D" parent="." unique_id=311237514]
+transform = Transform3D(-0.99442947, 0.10540417, -8.742278e-08, 0.10540417, 0.99442947, 0, 8.6935785e-08, -9.214725e-09, -1, 0, 1.486045, -0.08167141)
+mesh = SubResource("Mesh_paper")
+
+[node name="BackNoticeRight" type="MeshInstance3D" parent="." unique_id=1614511515]
+transform = Transform3D(-0.9993338, -0.036496714, -8.742278e-08, -0.036496714, 0.9993338, 0, 8.736453e-08, 3.190644e-09, -1, 0.603151, 1.62, -0.08167141)
+mesh = SubResource("Mesh_paper")

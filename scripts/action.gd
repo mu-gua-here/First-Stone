@@ -11,7 +11,7 @@ class_name Action
 ## and instead pre-resolves the target itself before calling execute(). See
 ## PolicyEngine.execute() for how the two paths reconcile.
 
-enum Kind { ASSIGN_JOB, ASSIGN_HOUSING, ASSIGN_GATHER, ASSIGN_BUILD_TASK }
+enum Kind { ASSIGN_JOB, ASSIGN_HOUSING, ASSIGN_GATHER, ASSIGN_BUILD_TASK, ASSIGN_HAUL, EAT, WANDER }
 
 @export var kind: Kind
 @export var target_query: Condition  # how to find the building/node to assign *to* (policy path)
@@ -35,4 +35,22 @@ static func new_assign_gather() -> Action:
 static func new_assign_build_task() -> Action:
 	var a := Action.new()
 	a.kind = Kind.ASSIGN_BUILD_TASK
+	return a
+
+## Push loose logs to the stockpile (a standing task, see Citizen._start_hauling)
+static func new_assign_haul() -> Action:
+	var a := Action.new()
+	a.kind = Kind.ASSIGN_HAUL
+	return a
+
+## Walk to the stockpile and eat until full (see Citizen.start_eating). Used by the "Eat when hungry" tradition.
+static func new_eat() -> Action:
+	var a := Action.new()
+	a.kind = Kind.EAT
+	return a
+
+## Amble off to a random spot (see Citizen.start_wander). Used by the "Wander when idle" tradition.
+static func new_wander() -> Action:
+	var a := Action.new()
+	a.kind = Kind.WANDER
 	return a

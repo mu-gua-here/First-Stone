@@ -1,0 +1,139 @@
+[gd_scene format=3 uid="uid://c0fwlaeyw52f6"]
+
+[ext_resource type="Script" uid="uid://c5pwfameg2urf" path="res://scripts/gatherable.gd" id="1_gath"]
+[ext_resource type="Script" uid="uid://b4i7dfy6u3e8w" path="res://scripts/structure.gd" id="2_struct"]
+[ext_resource type="PackedScene" uid="uid://ipdasb067d7p" path="res://models/primitive/pine-tree.tscn" id="3_sihpf"]
+
+[sub_resource type="Resource" id="Resource_fruit_tree"]
+script = ExtResource("2_struct")
+display_name = "Fruit Tree"
+gatherable = true
+secondary_resource_type = "food"
+food_chance = 0.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_fruit"]
+albedo_color = Color(0.85, 0.2, 0.15, 1)
+roughness = 0.6
+
+[sub_resource type="SphereMesh" id="SphereMesh_fruit"]
+material = SubResource("StandardMaterial3D_fruit")
+radius = 0.14
+height = 0.28
+radial_segments = 8
+rings = 4
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_trunk"]
+height = 1.5
+radius = 0.2
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_springarm"]
+height = 4.0
+radius = 1.5
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_pick"]
+height = 5.5
+radius = 1.4
+
+[sub_resource type="Gradient" id="Gradient_hint"]
+offsets = PackedFloat32Array(0.14150943, 0.6650943, 1)
+colors = PackedColorArray(1, 0.85, 0.1, 1, 1, 0.85, 0.1, 1, 1, 0.85, 0.1, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_hint"]
+gradient = SubResource("Gradient_hint")
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 0.5)
+
+[node name="FruitTree" type="Node3D" unique_id=929577578 node_paths=PackedStringArray("progress_anchor", "interact_hint", "fruit_container")]
+script = ExtResource("1_gath")
+structure = SubResource("Resource_fruit_tree")
+progress_anchor = NodePath("ProgressAnchor")
+fruit_container = NodePath("Fruit")
+interact_hint = NodePath("InteractHint")
+
+[node name="PineTree" parent="." unique_id=296540757 instance=ExtResource("3_sihpf")]
+script = null
+
+[node name="Fruit" type="Node3D" parent="." unique_id=1373741218]
+
+[node name="Fruit1" type="MeshInstance3D" parent="Fruit" unique_id=619080354]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.94660616, 2.2694058, 0.4)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit2" type="MeshInstance3D" parent="Fruit" unique_id=1431053808]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.92894447, 3, 0.6)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit3" type="MeshInstance3D" parent="Fruit" unique_id=1839926630]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.8851135, 3.4, -0.2663555)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit4" type="MeshInstance3D" parent="Fruit" unique_id=1030389656]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.6, 2.4, -0.81935906)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit5" type="MeshInstance3D" parent="Fruit" unique_id=1312780482]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5174048, 3.2, -0.9)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit6" type="MeshInstance3D" parent="Fruit" unique_id=1684946864]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7709887, 3.6461623, -0.2)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit7" type="MeshInstance3D" parent="Fruit" unique_id=1270960724]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.31787276, 3.4, 0.7800391)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit8" type="MeshInstance3D" parent="Fruit" unique_id=1185740121]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.40598655, 4.550122, -0.43901992)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit9" type="MeshInstance3D" parent="Fruit" unique_id=1339054911]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.31787276, 4.6837316, 0.44367623)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Fruit10" type="MeshInstance3D" parent="Fruit" unique_id=1206275155]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.31787276, 5.714417, 0.03287077)
+mesh = SubResource("SphereMesh_fruit")
+
+[node name="Trunk" type="StaticBody3D" parent="." unique_id=1488395989]
+collision_layer = 2
+collision_mask = 7
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Trunk" unique_id=893744665]
+transform = Transform3D(3, 0, 0, 0, 3, 0, 0, 0, 3, 0, 2.25, 0)
+shape = SubResource("CylinderShape3D_trunk")
+
+[node name="Springarm" type="StaticBody3D" parent="." unique_id=724641198]
+collision_layer = 8
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Springarm" unique_id=453694505]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
+shape = SubResource("CylinderShape3D_springarm")
+
+[node name="PickBody" type="StaticBody3D" parent="." unique_id=1705699183]
+collision_layer = 16
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PickBody" unique_id=104101503]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.75, 0)
+shape = SubResource("CylinderShape3D_pick")
+
+[node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=416249522]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+radius = 0.7
+affect_navigation_mesh = true
+carve_navigation_mesh = true
+avoidance_layers = 2
+use_3d_avoidance = true
+
+[node name="ProgressAnchor" type="Marker3D" parent="." unique_id=2136313732]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0)
+
+[node name="InteractHint" type="Sprite3D" parent="." unique_id=1968622505]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+visible = false
+billboard = 1
+no_depth_test = true
+texture = SubResource("GradientTexture2D_hint")

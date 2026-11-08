@@ -23,6 +23,14 @@ var builder: Node = null
 @export var hostile_label: Label
 @export var assign_hint_label: Label
 @export var ring: MeshInstance3D
+@export var outline_material: Material ## yellow overlay drawn on trees and loose logs while a citizen is selected (assignable targets)
+const OUTLINE_REFRESH_INTERVAL := 0.15 # logs spawn, trees fall and the player walks (what is in reach changes) while a citizen is selected
+var _outlined: Array[MeshInstance3D] = []
+var _outline_timer := 0.0
+var _hovered: Node3D = null # citizen under the mouse and within the player's reach: gets the outline as a "you can select me" hint
+var _hover_meshes: Array[MeshInstance3D] = []
+
+var _plate_hover: Node3D = null # citizen under the mouse at any distance: the only one (besides the selected) with a nameplate
 
 func _ready() -> void:
 	add_to_group("citizen_selector")
@@ -60,29 +68,29 @@ func _try_select_at(screen_pos: Vector2) -> void:
 	query.collide_with_bodies = true
 	var result = space_state.intersect_ray(query)
 	
-	if result and result.collider and (result.collider.is_in_group("citizen") or result.collider.is_in_group("player")):
-		if selected_citizen == result.collider:
+	# A citizen under the click: the nearest thing the ray hits wins, so a tree or log standing in front of a citizen
+	# blocks the click, and a citizen beyond the player's work reach can't be picked at all.
+	var picked := _citizen_under_mouse()
+	if picked != null:
+		if selected_citizen == picked:
 			_deselect()
 		else:
-			_select(result.collider)
+			_select(picked)
 		get_viewport().set_input_as_handled()
 		return
 	
-	# Raycast missed (or hit something else in front of a moving citizen) --
-	# fall back to the nearest citizen/player on screen within click_assist_pixels.
-	var assist_target = _find_nearest_on_screen(screen_pos)
-	if assist_target:
-		if selected_citizen == assist_target:
-			_deselect()
-		else:
-			_select(assist_target)
-		get_viewport().set_input_as_handled()
-		return
 	
 	# Not a citizen/player -- if we have a CITIZEN selected (not the player --
 	# the player isn't assignable to anything), see if the click landed on a
 	# building/tree/site cell. This is the manual assignment path (A.3).
-	if selected_citizen and is_instance_valid(selected_citizen) and not selected_citizen.is_in_group("player") and result and result.has("position"):
+	if selected_citizen and is_instance_valid(selected_citizen) and result and result.has("position"):
+		# A loose log: put the citizen on hauling duty (they push it, and every other loose log, to the stockpile)
+		if result.collider.is_in_group("resource_prop") and not result.collider.collected:
+			var hauling := _execute(Action.new_assign_haul(), String(result.collider.name))
+			_flash_assign_hint(hauling)
+			_after_assign(hauling)
+			get_viewport().set_input_as_handled()
+			return
 		if _try_assign_at_world_position(result.position):
 			get_viewport().set_input_as_handled()
 			return
@@ -96,8 +104,6 @@ func _find_nearest_on_screen(screen_pos: Vector2) -> Node3D:
 		return null
 	
 	var candidates: Array = get_tree().get_nodes_in_group("citizen")
-	if Globals.player:
-		candidates.append(Globals.player)
 	
 	var best: Node3D = null
 	var best_dist := click_assist_pixels
@@ -128,9 +134,20 @@ func _execute(action: Action, target) -> bool:
 	world_sync.req_assign(action.kind, selected_citizen.data.id, target_id)
 	return true # optimistic; the server's real answer follows
 
-func _on_assign_result(ok: bool) -> void:
-	_flash_assign_hint(ok)
-	_refresh_panel()
+func _on_assign_result(ok: bool, reason: String) -> void:
+	_flash_assign_hint(ok, reason)
+	if ok:
+		_deselect() # online: the server accepted the task
+	else:
+		_refresh_panel()
+
+## A task was handed out: the citizen is done being selected. A refusal keeps them selected (the panel shows why).
+## Online the answer comes later (_on_assign_result), so it decides there.
+func _after_assign(ok: bool) -> void:
+	if not ok:
+		_refresh_panel()
+	elif not Globals.online_client:
+		_deselect()
 
 ## Resolves a world-space hit position to a placed structure or construction site id
 func _try_assign_at_world_position(world_pos: Vector3) -> bool:
@@ -143,7 +160,7 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 	if site_id != builder.NO_ID and Builder.flat_distance(builder.construction_sites[site_id].position, world_pos) <= Builder.PICK_RADIUS:
 		assigned = _execute(Action.new_assign_build_task(), site_id)
 		_flash_assign_hint(assigned)
-		_refresh_panel()
+		_after_assign(assigned)
 		return true
 	
 	# Gatherable structure (tree): assign selected citizen to gather it
@@ -153,7 +170,7 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 		if structure_index >= 0 and structure_index < builder.structures.size() and builder.structures[structure_index].gatherable:
 			assigned = _execute(Action.new_assign_gather(), id)
 			_flash_assign_hint(assigned)
-			_refresh_panel()
+			_after_assign(assigned)
 			return true
 	
 	# Building (house/workplace): assign housing or job.
@@ -172,27 +189,120 @@ func _try_assign_at_world_position(world_pos: Vector3) -> bool:
 		return false
 	
 	_flash_assign_hint(assigned)
-	_refresh_panel()
+	_after_assign(assigned)
 	return true
 
-func _flash_assign_hint(success: bool) -> void:
+## `reason` is why the Policy Engine refused (offline: read straight from it; online: sent back by the server)
+func _flash_assign_hint(success: bool, reason: String = PolicyEngine.last_failure) -> void:
 	assign_hint_label.visible = true
-	assign_hint_label.text = "Assigned!" if success else "No free slot there."
-	assign_hint_label.modulate = Color(0.45, 0.9, 0.45) if success else Color(0.9, 0.45, 0.45)
+	if success:
+		assign_hint_label.text = "Assigned!"
+		assign_hint_label.modulate = Color(0.45, 0.9, 0.45)
+	else:
+		assign_hint_label.text = reason if reason != "" else "No free slot there."
+		assign_hint_label.modulate = Color(1.0, 0.25, 0.25)
 
 func _select(citizen: Node3D) -> void:
+	_set_hover(null) # the outline goes away on click; from here on it marks assignable targets instead
+	_hide_selected_plate()
 	selected_citizen = citizen
+	_set_plate(citizen, true) # the selected citizen keeps their nameplate even when the mouse moves away
 	panel.visible = true
 	ring.visible = true
 	assign_hint_label.visible = false
 	_refresh_panel()
+	_refresh_outlines()
+
+func _hide_selected_plate() -> void:
+	if selected_citizen != null and is_instance_valid(selected_citizen) and selected_citizen != _plate_hover:
+		_set_plate(selected_citizen, false)
 
 func _deselect() -> void:
+	_hide_selected_plate()
 	selected_citizen = null
 	panel.visible = false
 	ring.visible = false
+	_refresh_outlines()
 
-func _process(_delta: float) -> void:
+## The citizen under the mouse: whatever the physics ray hits first. If that is a citizen it is picked; if it is a tree,
+## log or building it blocks the click. The on-screen click assist (a moving citizen is easy to miss by a few pixels)
+## only applies when the ray hit nothing, or hit something farther away than that citizen. Citizens outside the
+## player's work reach (the same range as chopping a tree) can't be picked.
+func _citizen_under_mouse(limit_reach := true) -> Node3D:
+	if view_camera == null:
+		return null
+	var screen_pos := Globals.aim_position()
+	var from := view_camera.project_ray_origin(screen_pos)
+	var to := from + view_camera.project_ray_normal(screen_pos) * max_select_distance
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collide_with_bodies = true
+	var result := get_world_3d().direct_space_state.intersect_ray(query)
+	var hit_distance := INF
+	if result:
+		if result.collider and result.collider.is_in_group("citizen"):
+			return result.collider if (not limit_reach or _in_work_reach(result.collider)) else null
+		hit_distance = from.distance_to(result.position)
+	var assist := _find_nearest_on_screen(screen_pos)
+	if assist != null and assist.is_in_group("citizen") and from.distance_to(assist.global_position) < hit_distance \
+			and (not limit_reach or _in_work_reach(assist)):
+		return assist
+	return null
+
+func _in_work_reach(citizen: Node3D) -> bool:
+	var player := Globals.player
+	return player == null or Builder.flat_distance(citizen.global_position, player.global_position) <= Builder.PLAYER_WORK_REACH
+
+## A citizen's floating nameplate (name and bars) shows only while the mouse is on them (any distance), or while they
+## are selected -- 100 citizens in one spot would otherwise pile up into an unreadable mess. Other players' nameplates
+## are never touched.
+func _update_nameplates() -> void:
+	var under_mouse := _citizen_under_mouse(false)
+	if under_mouse == _plate_hover:
+		return
+	if _plate_hover != null and is_instance_valid(_plate_hover) and _plate_hover != selected_citizen:
+		_set_plate(_plate_hover, false)
+	_plate_hover = under_mouse
+	if _plate_hover != null:
+		_set_plate(_plate_hover, true)
+
+func _set_plate(citizen: Node3D, shown: bool) -> void:
+	var plate := citizen.get("nameplate") as Nameplate
+	if plate != null and citizen != Globals.player:
+		plate.set_shown(shown)
+
+## Yellow outline on the hovered citizen, only while they are within the player's work reach
+func _update_hover() -> void:
+	var target: Node3D = null
+	var player := Globals.player
+	if player != null and (builder == null or not builder.interact_mode):
+		var candidate := _citizen_under_mouse()
+		if candidate != null and candidate != selected_citizen \
+				and Builder.flat_distance(candidate.global_position, player.global_position) <= Builder.PLAYER_WORK_REACH:
+			target = candidate
+	_set_hover(target)
+
+func _set_hover(target: Node3D) -> void:
+	if target == _hovered:
+		return
+	for mesh in _hover_meshes:
+		if is_instance_valid(mesh):
+			mesh.material_overlay = null
+	_hover_meshes.clear()
+	_hovered = target
+	if target == null or outline_material == null:
+		return
+	for node in target.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		mesh.material_overlay = outline_material
+		_hover_meshes.append(mesh)
+
+func _process(delta: float) -> void:
+	_update_hover()
+	_update_nameplates()
+	_outline_timer -= delta
+	if _outline_timer <= 0.0 and selected_citizen != null:
+		_outline_timer = OUTLINE_REFRESH_INTERVAL
+		_refresh_outlines()
 	if selected_citizen and is_instance_valid(selected_citizen):
 		_refresh_panel()
 		_update_ring_position()
@@ -200,6 +310,30 @@ func _process(_delta: float) -> void:
 	elif selected_citizen:
 		# Citizen was freed (e.g. removed from the world) while selected
 		_deselect()
+
+## Yellow outline on everything the selected citizen can be sent to (trees, loose logs). Cleared on deselect.
+func _refresh_outlines() -> void:
+	var wanted: Array[MeshInstance3D] = []
+	var player := Globals.player
+	var active: bool = outline_material != null and player != null and selected_citizen != null \
+			and is_instance_valid(selected_citizen)
+	if active:
+		var targets: Array = get_tree().get_nodes_in_group("gatherable")
+		for prop in get_tree().get_nodes_in_group("resource_prop"):
+			if not prop.collected:
+				targets.append(prop)
+		for target in targets:
+			if Builder.flat_distance(target.global_position, player.global_position) > Builder.PLAYER_WORK_REACH:
+				continue # out of the player's reach, so not offered
+			for node in target.find_children("*", "MeshInstance3D", true, false):
+				wanted.append(node as MeshInstance3D)
+	for mesh in _outlined:
+		if is_instance_valid(mesh) and not wanted.has(mesh):
+			mesh.material_overlay = null
+	for mesh in wanted:
+		if mesh.material_overlay != outline_material:
+			mesh.material_overlay = outline_material
+	_outlined = wanted
 
 func _update_ring_position() -> void:
 	# Flat ring sitting just above the ground at the citizen's feet
@@ -229,8 +363,7 @@ func _update_panel_position() -> void:
 	panel.position = target_pos
 
 func _refresh_panel() -> void:
-	if selected_citizen.is_in_group("player"):
-		_refresh_player_panel()
+	if selected_citizen == null or not is_instance_valid(selected_citizen):
 		return
 	
 	var d = selected_citizen.data
@@ -247,27 +380,11 @@ func _refresh_panel() -> void:
 	stats_label.append_text("[b]Job:[/b] %s" % job_text)
 
 	_begin_bars()
-	_set_bar("Happiness", d.happiness, 100.0)
-	_set_bar("Health", selected_citizen.health, selected_citizen.max_health)
-	_set_bar("Energy", d.energy, 100.0)
+	_set_bar("Happiness", d.happiness, 100.0) # health and energy are on the citizen's nameplate now
 	_end_bars()
 
 	hostile_label.visible = selected_citizen.has_method("get") and "is_chasing_player" in selected_citizen and selected_citizen.is_chasing_player
 	hostile_label.text = "Hostile -- chasing player!"
-
-# The player isn't a citizen (no CitizenData, no job/age/happiness) -- just
-# show the two stats that matter to them directly: health and energy.
-func _refresh_player_panel() -> void:
-	name_label.text = "You"
-	id_label.text = ""
-
-	stats_label.clear()
-
-	_begin_bars()
-	_set_bar("Health", selected_citizen.health, selected_citizen.max_health)
-	_set_bar("Energy", selected_citizen.energy, 100.0)
-	_end_bars()
-	hostile_label.visible = false
 
 # Stat bars are real ProgressBar controls, not text (the game font has no block-character glyphs,
 # and a web export has no system font to fall back on). Each row is a node under `bars_box`,

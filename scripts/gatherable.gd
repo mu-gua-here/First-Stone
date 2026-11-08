@@ -16,10 +16,15 @@ class_name Gatherable
 ## Used only when no anchor is assigned.
 @export var fallback_bar_height := 6.0
 
+## Optional: a Node3D whose children are fruit meshes hanging on the tree (the fruit tree's "Fruit" node). Chopping then
+## detaches them one by one -- each hanging fruit disappears and the same fruit drops as a real prop from where it hung --
+## instead of spawning new ones. The tree's fruit count is the number of children. Needs Structure.secondary_resource_type.
+@export var fruit_container: Node3D
+
 ## Optional "you can interact with me" marker (a billboard Sprite3D in the tree scene, hidden by default).
 ## It is shown while the player is within hint_distance of this object.
 @export var interact_hint: Node3D
-@export var hint_distance := 5.0
+@export var hint_distance := 4.0
 const HINT_CHECK_INTERVAL := 0.15 # seconds between distance checks (cheap, and there are many trees)
 var _hint_timer := randf() * HINT_CHECK_INTERVAL # desync the trees so they don't all check on one frame
 
@@ -27,6 +32,26 @@ func get_progress_position() -> Vector3:
 	if progress_anchor != null:
 		return progress_anchor.global_position
 	return global_position + Vector3.UP * fallback_bar_height
+
+## How many fruits hang on this tree when untouched (0 = no fruit_container)
+func get_fruit_count() -> int:
+	return fruit_container.get_child_count() if fruit_container != null else 0
+
+## Where the index-th fruit hangs, in world space
+func get_fruit_position(index: int) -> Vector3:
+	if fruit_container != null and index < fruit_container.get_child_count():
+		var fruit := fruit_container.get_child(index) as Node3D
+		if fruit != null:
+			return fruit.global_position
+	return global_position
+
+## Chop progress 0..1 -> fruits still hanging: the first ones go as soon as the chopping starts (same rule as the
+## dropped props, see Builder._spawn_fruit_drops), so every peer shows the same tree.
+func update_fruit_visibility(progress: float) -> void:
+	var total := get_fruit_count()
+	var gone := floori(progress * total)
+	for i in total:
+		(fruit_container.get_child(i) as Node3D).visible = i >= gone
 
 func _ready() -> void:
 	add_to_group("gatherable")

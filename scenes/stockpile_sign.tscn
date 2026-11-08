@@ -41,6 +41,13 @@ script = ExtResource("1_sign")
 front_count = NodePath("FrontCount")
 back_count = NodePath("BackCount")
 
+[node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=1897599863]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+radius = 1.5
+affect_navigation_mesh = true
+carve_navigation_mesh = true
+use_3d_avoidance = true
+
 [node name="PostLeft" type="MeshInstance3D" parent="." unique_id=1356196271]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.05, 1.45, 0)
 mesh = SubResource("CylinderMesh_post")

@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://cwik60akjhciu"]
 
 [ext_resource type="Script" uid="uid://cupa81y0w0n4l" path="res://scripts/citizen.gd" id="1_fhwll"]
+[ext_resource type="PackedScene" uid="uid://bkgvgs6dkcy8o" path="res://scenes/nameplate.tscn" id="2_nameplate"]
 
 [sub_resource type="ORMMaterial3D" id="ORMMaterial3D_3aquc"]
 albedo_color = Color(0.9947862, 0.8172626, 3.85046e-07, 1)
@@ -57,11 +58,17 @@ shape = SubResource("CapsuleShape3D_fhwll")
 avoidance_enabled = true
 height = 0.1
 radius = 0.1
-neighbor_distance = 0.1
-max_neighbors = 1
+neighbor_distance = 3.0
+max_neighbors = 8
+time_horizon_agents = 1.5
 time_horizon_obstacles = 0.5
 max_speed = 1.0
+avoidance_layers = 1
+avoidance_mask = 2
 use_3d_avoidance = true
+
+[node name="Nameplate" parent="." instance=ExtResource("2_nameplate")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.55, 0)
 
 [node name="Sync" type="MultiplayerSynchronizer" parent="."]
 replication_interval = 0.05

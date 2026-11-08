@@ -30,7 +30,9 @@ const MAX_PROP_IMPULSE := 40.0
 const PROP_PUSH_RANGE := 4.0
 
 ## The server's answer to a client's req_assign
-signal assign_result(ok: bool)
+signal assign_result(ok: bool, reason: String)
+## The server's answer to a client's req_prop_grab
+signal grab_result(prop_name: String, ok: bool)
 
 # --- server side ---
 var _log: Array = [] # every event so far, replayed to late joiners
@@ -41,6 +43,8 @@ var _demolish_latest := {} # structure / site id -> demolish progress waiting fo
 var _site_sent := {}
 var _stock_sent := ""
 var _props_sent := {} # prop name -> [position, rotation] as last sent
+const GRAB_RANGE := 3.0 # how close a client must be to a prop to grab it (a little looser than reach, for latency)
+var _held_by := {} # peer id -> Array of names of the props that client is carrying (oldest first, up to ResourceProp.MAX_CARRY)
 
 # --- client side ---
 var _chop_pending := {} # tree id -> progress to add, waiting for the next request
@@ -160,6 +164,7 @@ func _on_peer_connected(peer_id: int) -> void:
 func _on_peer_disconnected(peer_id: int) -> void:
 	if multiplayer.is_server():
 		builder.release_builder("player_%d" % peer_id)
+		_drop_held(peer_id)
 
 
 # Catches a new player up: replay everything that ever happened, then the current "how it is right now" values.
@@ -185,6 +190,7 @@ func _process(delta: float) -> void:
 	if not _online():
 		return
 	if multiplayer.is_server():
+		_carry_held_props()
 		_server_tick(delta)
 	else:
 		_client_tick(delta)
@@ -332,7 +338,7 @@ func req_chop(id: String, amount: float) -> void:
 	if avatar == null:
 		return
 	var pos: Vector3 = builder.placed_structures[id]["position"]
-	if Builder.flat_distance(avatar.net_position, pos) > Builder.PLAYER_WORK_REACH + REACH_SLACK:
+	if Builder.flat_distance(avatar.net_position, pos) > builder.get_gather_reach(id) + REACH_SLACK:
 		return # not actually next to it
 	var result: Dictionary = builder.add_chop_progress(id, clampf(amount, 0.0, MAX_CHOP_STEP))
 	var bonus: float = result.get("energy_bonus", 0.0)
@@ -376,18 +382,85 @@ func _req_assign(kind: int, citizen_id: String, target_id: String) -> void:
 				ok = PolicyEngine.execute(Action.new_assign_build_task(), citizen, target_id)
 			Action.Kind.ASSIGN_GATHER:
 				ok = PolicyEngine.execute(Action.new_assign_gather(), citizen, target_id)
+			Action.Kind.ASSIGN_HAUL:
+				ok = PolicyEngine.execute(Action.new_assign_haul(), citizen, target_id)
 			Action.Kind.ASSIGN_HOUSING:
 				if builder.buildings.has(target_id):
 					ok = PolicyEngine.execute(Action.new_assign_housing(), citizen, builder.buildings[target_id])
 			Action.Kind.ASSIGN_JOB:
 				if builder.buildings.has(target_id):
 					ok = PolicyEngine.execute(Action.new_assign_job(), citizen, builder.buildings[target_id])
-	answer_assign.rpc_id(sender, ok)
+	answer_assign.rpc_id(sender, ok, PolicyEngine.last_failure)
 
 
 @rpc("authority", "call_remote", "reliable")
-func answer_assign(ok: bool) -> void:
-	assign_result.emit(ok)
+func answer_assign(ok: bool, reason: String) -> void:
+	assign_result.emit(ok, reason)
+
+
+## Client: ask the server to pick up (want = true) or put down (false) a small prop, see Player._update_grab_online
+func req_prop_grab(prop_name: String, want: bool) -> void:
+	if _online():
+		_req_prop_grab.rpc_id(1, prop_name, want)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _req_prop_grab(prop_name: String, want: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not want:
+		_drop_held(sender, prop_name)
+		return
+	var prop := builder.get_node_or_null(NodePath(prop_name)) as ResourceProp
+	var avatar := _avatar(sender)
+	var carried: Array = _held_by.get(sender, [])
+	var ok := prop != null and avatar != null and carried.size() < ResourceProp.MAX_CARRY and not carried.has(prop.name) \
+			and prop.can_be_grabbed() and avatar.net_position.distance_to(prop.global_position) <= GRAB_RANGE
+	if ok:
+		prop.grab()
+		carried.append(prop.name)
+		_held_by[sender] = carried
+	answer_prop_grab.rpc_id(sender, prop_name, ok)
+
+@rpc("authority", "call_remote", "reliable")
+func answer_prop_grab(prop_name: String, ok: bool) -> void:
+	grab_result.emit(prop_name, ok)
+
+## Server: let go of what `peer_id` is carrying -- just the named prop, or everything when no name is given
+## (they dropped it, or left)
+func _drop_held(peer_id: int, prop_name: String = "") -> void:
+	var carried: Array = _held_by.get(peer_id, [])
+	var to_drop: Array = carried.duplicate() if prop_name == "" else ([prop_name] if carried.has(prop_name) else [])
+	for dropped in to_drop:
+		carried.erase(dropped)
+		var prop := builder.get_node_or_null(NodePath(String(dropped))) as ResourceProp
+		if prop != null and prop.held and not prop.collected:
+			prop.release()
+	if carried.is_empty():
+		_held_by.erase(peer_id)
+	else:
+		_held_by[peer_id] = carried
+
+## Server: every frame, keep each carried prop floating over its carrier (the prop is frozen, so it doesn't move itself)
+func _carry_held_props() -> void:
+	for peer_id in _held_by.keys():
+		var avatar := _avatar(peer_id)
+		if avatar == null:
+			_drop_held(peer_id)
+			continue
+		var carried: Array = _held_by.get(peer_id, [])
+		var slot := 0
+		for prop_name in carried.duplicate():
+			var prop := builder.get_node_or_null(NodePath(String(prop_name))) as ResourceProp
+			if prop == null or prop.collected:
+				carried.erase(prop_name) # collected (or gone): the stack closes up
+				continue
+			prop.global_position = avatar.net_position + ResourceProp.carry_offset(slot)
+			slot += 1
+		if carried.is_empty():
+			_held_by.erase(peer_id)
+		else:
+			_held_by[peer_id] = carried
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")

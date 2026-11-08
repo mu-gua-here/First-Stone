@@ -15,6 +15,9 @@ class_name Nameplate
 		_apply_bar_visibility()
 
 
+var _shown := true
+
+
 func _ready() -> void:
 	_apply_bar_visibility()
 
@@ -32,5 +35,16 @@ func set_stats(health: float, energy: float) -> void:
 func _apply_bar_visibility() -> void:
 	if not is_node_ready():
 		return
-	health_bar.set_visible_in_range(show_bars) # also stops its viewport rendering while hidden
-	energy_bar.set_visible_in_range(show_bars)
+	var on := show_bars and _shown
+	health_bar.set_visible_in_range(on) # also stops its viewport rendering while hidden
+	energy_bar.set_visible_in_range(on)
+
+
+## Hides / shows the whole plate (the citizen selector shows a citizen's plate only while the mouse is on them).
+## Hidden bars also stop their viewports rendering.
+func set_shown(value: bool) -> void:
+	if value == _shown:
+		return
+	_shown = value
+	visible = value
+	_apply_bar_visibility()
