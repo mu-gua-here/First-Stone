@@ -3,13 +3,15 @@
 [ext_resource type="Script" uid="uid://c5pwfameg2urf" path="res://scripts/gatherable.gd" id="1_koe0x"]
 [ext_resource type="Script" uid="uid://b4i7dfy6u3e8w" path="res://scripts/structure.gd" id="2_fbvlv"]
 [ext_resource type="PackedScene" uid="uid://cb4l8k85nvjoy" path="res://models/medieval/tree.glb" id="3_4slu7"]
+[ext_resource type="PackedScene" path="res://models/primitive/stump.tscn" id="4_stump"]
 
 [sub_resource type="Resource" id="Resource_tree"]
 script = ExtResource("2_fbvlv")
 display_name = "Tree"
 gatherable = true
 resource_type = "wood"
-resource_yield = 5
+resource_yield = 1
+resource_yield_max = 3
 food_chance = 0.05
 
 [sub_resource type="CylinderShape3D" id="CylinderShape3D_iuv1v"]
@@ -38,6 +40,7 @@ fill_to = Vector2(1, 0.5)
 script = ExtResource("1_koe0x")
 structure = SubResource("Resource_tree")
 progress_anchor = NodePath("ProgressAnchor")
+depleted_scene = ExtResource("4_stump")
 interact_hint = NodePath("InteractHint")
 
 [node name="pine-tree" parent="." unique_id=430742324 instance=ExtResource("3_4slu7")]
@@ -70,10 +73,10 @@ shape = SubResource("CylinderShape3D_pick")
 [node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=199609894]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
 radius = 0.7
-avoidance_layers = 2
-use_3d_avoidance = true
 affect_navigation_mesh = true
 carve_navigation_mesh = true
+avoidance_layers = 2
+use_3d_avoidance = true
 
 [node name="ProgressAnchor" type="Marker3D" parent="." unique_id=1847362951]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0)

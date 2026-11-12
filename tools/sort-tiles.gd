@@ -35,7 +35,7 @@ func _post_import(scene: Node) -> Object:
 	# Sort by Z position first (top row to bottom row).
 	meshes.sort_custom(func(a: Node3D, b: Node3D):
 		if TOP_ROW_IS_NEGATIVE_Z:
-			return a.position.z < b.position.z
+			return a.position.z > b.position.z
 		return a.position.z > b.position.z
 	)
 

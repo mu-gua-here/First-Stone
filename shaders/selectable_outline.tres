@@ -1,10 +1,10 @@
-[gd_resource type="ShaderMaterial" format=3]
+[gd_resource type="ShaderMaterial" format=3 uid="uid://ct125sy6oiohm"]
 
-[ext_resource type="Shader" path="res://shaders/selectable_outline.gdshader" id="1_outline"]
+[ext_resource type="Shader" uid="uid://ckd3a4o7mwpy" path="res://shaders/selectable_outline.gdshader" id="1_outline"]
 
 [resource]
 render_priority = 0
 shader = ExtResource("1_outline")
 shader_parameter/outline_color = Color(1, 0.85, 0.1, 1)
-shader_parameter/rim_power = 1.6
-shader_parameter/fill_strength = 0.22
+shader_parameter/rim_power = 6.0
+shader_parameter/fill_strength = 0.1

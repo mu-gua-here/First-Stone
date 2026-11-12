@@ -25,6 +25,11 @@ const MIN_NAME_LENGTH := 2
 ## Address of the game server, e.g. "wss://play.example.com" (or "ws://127.0.0.1:8910" for testing).
 @export var server_url := "ws://127.0.0.1:8910"
 @export var retry_seconds := 5.0
+## If the very first connection attempt fails (no server running, or a browser page that cannot reach it), play on
+## your own copy of the world instead of sitting in a world where nothing responds. Never kicks in once you have
+## been connected: a dropped connection still just retries.
+@export var offline_fallback := true
+@export var connect_timeout := 8.0 # seconds before an attempt that neither succeeds nor fails is given up
 @export var net_player_scene: PackedScene
 ## Parent of all avatars. The MultiplayerSpawner's spawn path points here.
 @export var net_players: Node3D
@@ -40,6 +45,9 @@ var player_name := ""
 var player_color := Color.WHITE # random on the first visit, then remembered (see _load_saved_color)
 var _is_server := false
 var _connected := false
+var _ever_connected := false
+var _standalone := false
+var _connect_left := -1.0
 var _retry_left := -1.0
 var _last_status := ""
 var _names := {} # server only: peer id -> name
@@ -70,6 +78,13 @@ func _process(delta: float) -> void:
 	if _is_server:
 		_set_status("Server: %d player%s" % [net_players.get_child_count(), "" if net_players.get_child_count() == 1 else "s"])
 		return
+	if _standalone:
+		return
+	if _connect_left >= 0.0:
+		_connect_left -= delta
+		if _connect_left < 0.0 and not _connected:
+			_fail()
+			return
 	if _connected:
 		var count := net_players.get_child_count()
 		_set_status("Online: %d player%s" % [count, "" if count == 1 else "s"])
@@ -194,12 +209,17 @@ func _connect() -> void:
 		_fail()
 		return
 	multiplayer.multiplayer_peer = peer
+	_connect_left = connect_timeout
 	_set_status("Connecting to the server ...")
 
 
 # Back to offline and try again shortly
 func _fail() -> void:
 	_connected = false
+	_connect_left = -1.0
+	if offline_fallback and not _ever_connected:
+		_go_standalone()
+		return
 	var peer := multiplayer.multiplayer_peer
 	if peer != null:
 		peer.close()
@@ -207,6 +227,28 @@ func _fail() -> void:
 	for avatar in net_players.get_children():
 		avatar.queue_free()
 	_retry_left = retry_seconds
+
+
+# No server to talk to: become our own server. The Builder and the citizens run here, and nothing waits for requests
+# that would never be answered (every click on an object, a tree or a build site is a request while online_client).
+func _go_standalone() -> void:
+	if _standalone:
+		return
+	_standalone = true
+	_retry_left = -1.0
+	var peer := multiplayer.multiplayer_peer
+	if peer != null and not (peer is OfflineMultiplayerPeer):
+		peer.close()
+	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	for avatar in net_players.get_children():
+		avatar.queue_free()
+	Globals.hosting_world = true
+	Globals.online_client = false
+	var builder := Globals.builder as Builder
+	if builder != null:
+		builder.spawn_citizens(builder.starting_citizens) # a client never spawns them, the server does
+	print("Network: no server reachable, playing offline")
+	_set_status("Offline (no server reachable)")
 
 
 func _tls_options() -> TLSOptions:
@@ -270,6 +312,8 @@ func _on_peer_disconnected(peer_id: int) -> void:
 
 func _on_connected_to_server() -> void:
 	_connected = true
+	_ever_connected = true
+	_connect_left = -1.0
 	register_player.rpc_id(1, player_name, player_color)
 
 

@@ -69,7 +69,6 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 @export var stockpile_size_cells := 2
 
 @export_group("HUD nodes")
-@export var stockpile_label: Label # top-left resource counter
 @export var build_info_label: Label # what's selected while in build mode
 @export var build_hint_label: Label # transient warnings (e.g. "not enough wood")
 @export var stockpile_marker: Node3D # flat disc marking where logs must be pushed
@@ -90,11 +89,22 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 @export var food_stockpile_size_cells := 2
 @export var food_stockpile_marker: Node3D
 @export var food_stockpile_sign: StockpileSign # green "FOOD STORE" board at the food area's edge (food_stockpile_sign.tscn); bounces when fruit is stored
-## Resource types that pile up visibly on the woodpile. Anything else (fruit) is absorbed into the stockpile counter
-## the moment it settles on the stockpile block.
+## Heavy resource types that are only pushed around (logs). Anything else (fruit) is small enough to grab with E and carry.
 @export var stacked_resource_types: Array[String] = ["wood"]
+## Resource types that tidy themselves onto a pile inside their stockpile (logs: triangular woodpile, fruit: pyramid).
+## Nothing on a pile is frozen: it is all physics bodies, so taking or shoving one makes the ones above it tumble.
+@export var piled_resource_types: Array[String] = ["wood", "food"]
+## The fruit pyramid in the food stockpile: a square base of food_stack_base x food_stack_base fruit, and every layer above
+## has one fruit fewer per side, nested in the gaps below (base 4 -> 16 + 9 + 4 + 1 = 30 fruit). Any more just lie there.
+@export var food_stack_base := 4
+@export var food_stack_spacing := 0.34 # metres between neighbouring fruit; each layer sits spacing * 0.82 higher
+## Ready-made prop scene per resource type (RigidBody3D with resource_prop.gd), e.g. "food" -> scenes/fruit_prop.tscn.
+## Mass, damping, physics material, collision layers, mesh and collider are all set in that scene, not here.
+## A type with no entry falls back to resource_prop_meshes (logs) / a placeholder sphere.
+@export var resource_prop_scenes: Dictionary[String, PackedScene] = {}
+@export var food_stack_lift := 0.2 # how far above the food stockpile marker the bottom layer's fruit sit
 ## Energy one unit of food ("food" in the stockpile) restores when eaten.
-@export var food_energy := 25.0
+@export var food_energy := 5.0
 ## Citizens and the player go and eat from the stockpile once their energy drops below this...
 @export var hungry_below := 50.0
 ## ...and keep eating until their energy reaches this.
@@ -133,6 +143,7 @@ var _prop_shapes: Dictionary = {}
 
 # Mass for a placeholder resource prop's RigidBody3D
 const RESOURCE_PROP_MASS := 0.25
+const SMALL_PROP_LAYER := 32 # physics layer 6: fruit only (the player and citizens don't collide with it)
 const RESOURCE_SPAWN_HEIGHT := 3.0 # props drop from this far above a cell's floor
 
 const GHOST_BAR_HEIGHT := 3.0 # local Y offset above a construction cell's floor
@@ -145,18 +156,23 @@ var demolish_progress: Dictionary = {} # id (String) -> 0.0-1.0 how far a struct
 var demolish_visuals: Dictionary = {} # id (String) -> DemolishRing3D
 var _demolish_touched: Dictionary = {} # id (String) -> msec when labour last went into it (progress fades once it stops)
 var _count_timer := 0.0 # how long until the live stockpile counts are recomputed
-var _stacked: Array = [] # the logs on the woodpile, index = slot (null = a gap left by a log that was taken or used up)
+var _piles: Dictionary = {} # resource type -> Array of the props holding a slot on that pile, index = slot (null = a gap)
 var _rolled_yields := {} # tree id -> {"primary": int, "secondary": int}: what this particular tree drops (rolled once, server/offline only)
 
 var plane: Plane # Used for raycasting mouse
 
-var interact_mode: bool = false  # Toggle between building and movement modes
+# Modes: normal movement mode <-> INTERACT mode (Tab: the cursor is out). Inside interact mode you are BUILDING by default;
+# Backspace switches to DELETE mode (click-and-hold a building to take it apart, nothing is placed) and B goes back to
+# building. Tab leaves interact mode from either.
+var interact_mode: bool = false  # true = interact mode (cursor out: building, or deleting when delete_mode is on)
+var delete_mode: bool = false # only while interact_mode: clicking a building takes it apart (see Player._try_start_work)
 
+const DELETE_MODE_HINT := "DELETE MODE - click and hold a building to take it apart\n[B] back to building    [Tab] leave interact mode"
 const NO_ID := ""
 const DEMOLISH_REACH := 2.0 # fallback: how far (flat) from a click a structure/site may be and still be found
 const BUILD_RANGE_CELLS := 5 # how many grid cells from the player a structure may be placed
 const PICK_RADIUS := 5.0 # how far (flat) a mouse pick may land from a structure/site and still select it
-const PICK_RAY_LENGTH := 10.0
+const PICK_RAY_LENGTH := 500.0 # must reach well past the camera's furthest zoom, or clicks on anything far from the camera miss
 const GROUND_RAY_TOP := 200.0 # ground-height probes fall from here...
 const GROUND_RAY_BOTTOM := -200.0 # ...to here
 
@@ -305,6 +321,23 @@ func pick_world_position(screen_pos: Vector2) -> Variant:
 		return hit.position
 	return plane.intersects_ray(from, dir)
 
+# The build cursor never leaves BUILD_RANGE_CELLS of the player: a pick further out (the mouse over the horizon, a far
+# hill, the ocean) is pulled back along the line to the player, onto the ground at the edge of the range.
+func _clamp_to_build_range(point: Vector3) -> Vector3:
+	if Globals.player == null or world == null:
+		return point
+	var reach := BUILD_RANGE_CELLS * world.cell_size.x
+	var player_pos: Vector3 = Globals.player.global_position
+	var offset := Vector3(point.x - player_pos.x, 0.0, point.z - player_pos.z)
+	if offset.length() <= reach:
+		return point
+	offset = offset.normalized() * reach
+	var clamped := Vector3(player_pos.x + offset.x, point.y, player_pos.z + offset.z)
+	var ground_y := _ground_height_or_nan(clamped)
+	if not is_nan(ground_y):
+		clamped.y = ground_y
+	return clamped
+
 ## The registered free-standing object (tree) under the mouse, or NO_ID. One physics ray against the
 ## ground AND every object's PickBody: the nearest hit wins, so a hill or a nearer tree correctly
 ## hides whatever is behind it (no screen buffer needed, the physics ray is the depth test).
@@ -314,7 +347,7 @@ func pick_object_at(screen_pos: Vector2) -> String:
 		return NO_ID
 	var from := view_camera.project_ray_origin(screen_pos)
 	var dir := view_camera.project_ray_normal(screen_pos)
-	var query := PhysicsRayQueryParameters3D.create(from, from + dir * PICK_RAY_LENGTH, pick_collision_mask | object_pick_layer)
+	var query := PhysicsRayQueryParameters3D.create(from, from + dir * PICK_RAY_LENGTH, pick_collision_mask | object_pick_layer | ground_collision_mask)
 	query.exclude = _pick_excludes()
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
@@ -389,19 +422,17 @@ func _generate_id() -> String:
 func _process(delta):
 
 	# Controls
-	action_interact_mode() # Toggle between building and movement modes
+	action_interact_mode() # Tab: toggle interact mode (the build cursor)
+	action_delete_mode() # Backspace: delete mode (from interact mode)
 	action_rotate() # Rotates selection 90 degrees
 	action_structure_toggle() # Toggles between structures
 
-	action_save() # Saving
-	action_load() # Loading
-
-	# Only show selector and process building in building mode. The cursor snaps to the cell
+	# Only show selector and process building in building mode (interact mode, not deleting). The cursor snaps to the cell
 	# the mouse is over.
-	if interact_mode and world != null:
+	if interact_mode and not delete_mode and world != null:
 		var picked = pick_world_position(Globals.aim_position())
 		if picked != null:
-			var world_position: Vector3 = picked
+			var world_position: Vector3 = _clamp_to_build_range(picked)
 			var cell := world_to_cell(world_position)
 			_update_cursor(cell)
 			# Free-standing objects (trees) aren't grid-bound: the cursor follows the mouse exactly
@@ -415,6 +446,8 @@ func _process(delta):
 	_refresh_live_counts(delta)
 	_update_hud()
 
+	if delete_mode and build_hint_label != null:
+		_flash_build_hint(DELETE_MODE_HINT) # stays up for as long as delete mode lasts
 	if build_hint_timer > 0.0:
 		build_hint_timer -= delta
 		if build_hint_timer <= 0.0:
@@ -497,10 +530,11 @@ func _on_object_exiting(id: String, node: Node3D) -> void:
 		placed_structures.erase(id)
 
 # Plants a free-standing object (tree) at a world position, under objects_root
-func _plant_object(structure: Structure, pos: Vector3, node_name: String = "", yaw: float = -1.0) -> void:
+func _plant_object(structure: Structure, pos: Vector3, node_name: String = "", yaw: float = -1.0) -> Node3D:
 	var node := structure.scene.instantiate() as Node3D
 	if node == null:
-		return
+		return null
+	node.set_meta("planted", true) # planted in-game, not hand-placed in the scene: saved by its scene + position (SaveManager)
 	if node_name != "":
 		node.name = node_name # online: the same name on every copy, so the object gets the same id everywhere
 	(objects_root if objects_root != null else self).add_child(node)
@@ -509,6 +543,19 @@ func _plant_object(structure: Structure, pos: Vector3, node_name: String = "", y
 	# The node registered itself in _ready(), before it had been moved: refresh its recorded position
 	if _object_ids.has(node):
 		placed_structures[_object_ids[node]]["position"] = node.global_position
+	return node
+
+# What an object leaves behind when it is used up (Gatherable.depleted_scene: a tree's stump), in the same spot
+func _leave_depleted_model(node: Node3D) -> void:
+	var gatherable := node as Gatherable
+	if gatherable == null or gatherable.depleted_scene == null or not node.is_inside_tree():
+		return
+	var leftover := gatherable.depleted_scene.instantiate() as Node3D
+	if leftover == null:
+		return
+	var parent := node.get_parent()
+	parent.add_child(leftover)
+	leftover.global_transform = node.global_transform
 
 # Removes a placed structure: its cell reverts to what was there before (or the ground tile,
 # or Structure.depleted_item_name), and any BuildingInstance tracking it is dropped.
@@ -521,6 +568,9 @@ func remove_structure_instance(id: String) -> void:
 		# free-standing object: just remove the node (_on_object_exiting cleans up the records)
 		var node: Node3D = entry["node"]
 		if is_instance_valid(node):
+			if not node.has_meta("planted") and node.get_parent() == objects_root and not felled_objects.has(String(node.name)):
+				felled_objects.append(String(node.name)) # a hand-placed tree went down: remembered for the save file
+			_leave_depleted_model(node)
 			node.queue_free()
 		else:
 			placed_structures.erase(id)
@@ -792,49 +842,139 @@ func on_prop_collected(prop: ResourceProp) -> void:
 		stockpile_sign.bounce()
 	Audio.play(SFX_PLACE, -12)
 
-# Where the next log that reaches the pile goes (server / offline). Fills one layer at a time, then the next layer on top.
-# The bottom layer has stack_rows rows and each layer above has one row fewer (never fewer than 1), so with 2 rows the
-# top layer's single row nests in the groove between the two below. A gap left by a log that was taken is refilled first.
-func claim_stack_slot(prop: ResourceProp) -> Transform3D:
-	var slot := _stacked.find(null)
-	if slot == -1:
-		slot = _stacked.size()
-		_stacked.append(prop)
+# Where the next prop that reaches a pile goes (server / offline). Wood fills one layer at a time on a triangular woodpile:
+# the bottom layer has stack_rows rows and each layer above has one row fewer (never fewer than 1), so with 2 rows the
+# top layer's single row nests in the groove between the two below. Fruit fills a square pyramid (see _food_slot_transform).
+# A slot left empty (its prop was taken, used up or knocked off) is refilled first. Returns the slot's Transform3D, or null
+# when that pile is full (the prop then just lies where it is).
+func claim_stack_slot(prop: ResourceProp) -> Variant:
+	var resource_type := String(prop.get_meta("resource_type", ""))
+	var pile: Array = _piles.get(resource_type, [])
+	_prune_pile(pile)
+	var slot := pile.find(null)
+	var is_new_slot := slot == -1
+	if is_new_slot:
+		slot = pile.size()
+	var slot_transform: Variant = _slot_transform(resource_type, slot)
+	if slot_transform == null:
+		_piles[resource_type] = pile
+		return null
+	if is_new_slot:
+		pile.append(prop)
 	else:
-		_stacked[slot] = prop
+		pile[slot] = prop
+	_piles[resource_type] = pile
+	return slot_transform
+
+# Where slot `slot` of the pile for this resource type is (null = the pile has no such slot, it is full)
+func _slot_transform(resource_type: String, slot: int) -> Variant:
+	if resource_type == "food":
+		return _food_slot_transform(slot)
 	var columns := maxi(stack_columns, 1)
+	var base_rows := maxi(stack_rows, 1)
+	# One "triangle" = base_rows rows in the bottom layer, one fewer in each layer above, down to a single row.
+	var unit_size := 0
+	for r in range(base_rows, 0, -1):
+		unit_size += columns * r
+	@warning_ignore("integer_division")
+	var unit := slot / unit_size
+	var in_unit := slot % unit_size
+	# Finished triangles are followed by a NEW one beside it (along z first, then along x), each built up from its own
+	# bottom layer. When the block has no room for another triangle the pile is full.
+	var block := maxi(stockpile_size_cells, 1) * (world.cell_size.x if world != null else 2.0)
+	var units_z := maxi(floori(block / (base_rows * stack_spacing.z)), 1)
+	var units_x := maxi(floori(block / (columns * stack_spacing.x)), 1)
+	if unit >= units_z * units_x:
+		return null
 	var layer := 0
-	var in_layer := slot
-	var rows := maxi(stack_rows, 1)
+	var in_layer := in_unit
+	var rows := base_rows
 	while in_layer >= columns * rows:
 		in_layer -= columns * rows
 		layer += 1
-		rows = maxi(stack_rows - layer, 1)
+		rows = maxi(base_rows - layer, 1)
 	var row := floori(float(in_layer) / columns)
 	var column := in_layer % columns
 	var local := Vector3(
-		(column - (columns - 1) * 0.5) * stack_spacing.x,
+		(column - (columns - 1) * 0.5) * stack_spacing.x + (floori(float(unit) / units_z) - (units_x - 1) * 0.5) * columns * stack_spacing.x,
 		0.25 + layer * stack_spacing.y,
-		(row - (rows - 1) * 0.5) * stack_spacing.z)
+		(row - (rows - 1) * 0.5) * stack_spacing.z + (unit % units_z - (units_z - 1) * 0.5) * base_rows * stack_spacing.z)
 	var base_y := stockpile_marker.global_position.y if stockpile_marker != null else stockpile_position.y
 	var origin := Vector3(stockpile_position.x, base_y, stockpile_position.z) + local
 	var lying := Basis.from_euler(Vector3(deg_to_rad(stack_rotation_degrees.x), deg_to_rad(stack_rotation_degrees.y), deg_to_rad(stack_rotation_degrees.z)))
 	return Transform3D(lying, origin)
 
-# Frees a log's slot on the pile (it was used up or taken)
-func release_stack_slot(prop: ResourceProp) -> void:
-	var slot := _stacked.find(prop)
-	if slot != -1:
-		_stacked[slot] = null
-	while not _stacked.is_empty() and _stacked.back() == null:
-		_stacked.pop_back()
+# The fruit pyramid: a food_stack_base x food_stack_base square of fruit, then one fewer per side on every layer above,
+# each fruit resting in the gap between four below it (so it is centred and sits spacing * 0.82 higher).
+func _food_slot_transform(slot: int) -> Variant:
+	var base := maxi(food_stack_base, 1)
+	var unit_size := 0
+	for s in range(base, 0, -1):
+		unit_size += s * s
+	# A finished pyramid is followed by another one beside it, until the block has no room for more.
+	var unit := floori(float(slot) / unit_size)
+	var footprint := base * food_stack_spacing
+	var block := maxi(food_stockpile_size_cells, 1) * (world.cell_size.x if world != null else 2.0)
+	var per_side := maxi(floori(block / footprint), 1)
+	if unit >= per_side * per_side:
+		return null # every pyramid in the block is complete
+	var side := base
+	var layer := 0
+	var in_layer := slot % unit_size
+	while side > 0 and in_layer >= side * side:
+		in_layer -= side * side
+		layer += 1
+		side -= 1
+	var row := floori(float(in_layer) / side)
+	var column := in_layer % side
+	var local := Vector3(
+		(column - (side - 1) * 0.5) * food_stack_spacing + (unit % per_side - (per_side - 1) * 0.5) * footprint,
+		food_stack_lift + layer * food_stack_spacing * 0.82,
+		(row - (side - 1) * 0.5) * food_stack_spacing + (floori(float(unit) / per_side) - (per_side - 1) * 0.5) * footprint)
+	var base_y := food_stockpile_marker.global_position.y if food_stockpile_marker != null else food_stockpile_position.y
+	return Transform3D(Basis.IDENTITY, Vector3(food_stockpile_position.x, base_y, food_stockpile_position.z) + local)
 
-# Stealing: the player takes a log off the pile. Server / offline only. The log pops out loose, towards the thief.
-func take_log_from_pile(prop: ResourceProp, thief_position: Vector3) -> void:
-	if Globals.online_client or prop == null or not is_instance_valid(prop) or not prop.in_pile:
-		return
-	release_stack_slot(prop)
-	prop.take_from_pile(thief_position)
+# Forgets slots whose prop is gone, was used up, or stopped being a pile member, so they can be filled again
+func _prune_pile(pile: Array) -> void:
+	for i in pile.size():
+		var prop = pile[i]
+		if prop == null:
+			continue
+		if not is_instance_valid(prop) or prop.collected or not prop.in_pile or is_pile_displaced(prop):
+			pile[i] = null
+	while not pile.is_empty() and pile.back() == null:
+		pile.pop_back()
+
+# True if a prop that holds a slot has been knocked well away from it (a pile that tumbled). Props still flying to their
+# slot are not displaced.
+func is_pile_displaced(prop: ResourceProp) -> bool:
+	if not prop.in_pile or not prop.has_arrived():
+		return false
+	var resource_type := String(prop.get_meta("resource_type", ""))
+	var slot := (_piles.get(resource_type, []) as Array).find(prop)
+	if slot == -1:
+		return true # holds no slot after all
+	var slot_transform: Variant = _slot_transform(resource_type, slot)
+	if slot_transform == null:
+		return true
+	var tolerance := 0.45 * (food_stack_spacing if resource_type == "food" else minf(stack_spacing.y, stack_spacing.z))
+	return prop.global_position.distance_to((slot_transform as Transform3D).origin) > tolerance
+
+# Frees a prop's slot on its pile (it was used up, grabbed or knocked off)
+func release_stack_slot(prop: ResourceProp) -> void:
+	var pile: Array = _piles.get(String(prop.get_meta("resource_type", "")), [])
+	var slot := pile.find(prop)
+	if slot != -1:
+		pile[slot] = null
+	while not pile.is_empty() and pile.back() == null:
+		pile.pop_back()
+
+func is_piled_type(resource_type: String) -> bool:
+	return piled_resource_types.has(resource_type)
+
+# True if a world position is over the stockpile block this resource type piles up in
+func is_in_pile_block(resource_type: String, pos: Vector3) -> bool:
+	return is_in_food_stockpile(pos) if resource_type == "food" else is_in_stockpile(pos)
 
 # --- Live stockpile contents ---------------------------------------------------
 # There is no stored counter. Wood is the logs lying settled in the log stockpile right now, food is the fruit lying
@@ -855,17 +995,24 @@ func _stock_props(resource_type: String) -> Array[ResourceProp]:
 	return found
 
 func _refresh_live_counts(delta: float) -> void:
-	if Globals.online_client:
-		return # a client's copy comes from the server
 	_count_timer -= delta
 	if _count_timer > 0.0:
 		return
 	_count_timer = 0.25
-	for resource_type in ["wood", "food"]:
-		var total := 0
-		for prop in _stock_props(resource_type):
-			total += int(prop.get_meta("amount", 1))
-		map.stockpile[resource_type] = total
+	if not Globals.online_client: # a client's copy comes from the server
+		for resource_type in ["wood", "food"]:
+			var total := 0
+			for prop in _stock_props(resource_type):
+				total += int(prop.get_meta("amount", 1))
+			map.stockpile[resource_type] = total
+	_update_count_signs()
+
+# The boards at the two stockpiles show the counts (on every client, from its copy of map.stockpile)
+func _update_count_signs() -> void:
+	if stockpile_sign != null:
+		stockpile_sign.set_counts("Wood: %d" % int(map.stockpile.get("wood", 0)))
+	if food_stockpile_sign != null:
+		food_stockpile_sign.set_counts("Food: %d" % int(map.stockpile.get("food", 0)))
 
 # The wood a building draws comes off the log stockpile: real logs, the topmost first, shrink away.
 func _consume_stacked_logs(resource_type: String, amount: int) -> void:
@@ -887,8 +1034,8 @@ func consume_prop(prop_name: String) -> void:
 		prop.consume()
 
 # --- Food ---------------------------------------------------------------------
-# Fruit is gathered like wood (props from a fruit tree, shoved or carried onto the stockpile), but it does not pile
-# up: it is absorbed into the "food" count. Citizens and the player then eat from that count (see citizen.gd
+# Fruit is gathered like wood (props from a fruit tree, carried or shoved onto the food stockpile, where it tidies itself
+# into a pyramid). Citizens and the player then eat from the fruit lying there (see citizen.gd
 # _update_eating and player.gd _update_eating).
 
 func is_stacked_type(resource_type: String) -> bool:
@@ -900,6 +1047,12 @@ func absorb_prop(prop: ResourceProp) -> void:
 		food_stockpile_sign.bounce()
 	_net("prop_consume", [String(prop.name)])
 	prop.consume()
+
+# Eating a fruit straight out of someone's hands (player.gd): it is used up on the spot, on every client too
+func eat_held_prop(prop: ResourceProp) -> float:
+	_net("prop_consume", [String(prop.name)])
+	prop.consume()
+	return food_energy
 
 func has_food() -> bool:
 	return int(map.stockpile.get("food", 0)) > 0
@@ -917,7 +1070,8 @@ func take_food() -> float:
 	var fruit := _stock_props("food")
 	if fruit.is_empty():
 		return 0.0
-	var prop := fruit[0]
+	fruit.sort_custom(func(a: ResourceProp, b: ResourceProp) -> bool: return a.global_position.y > b.global_position.y)
+	var prop := fruit[0] # the topmost one, so the pyramid doesn't cave in underneath it
 	map.stockpile["food"] = maxi(int(map.stockpile.get("food", 0)) - int(prop.get_meta("amount", 1)), 0)
 	_net("prop_consume", [String(prop.name)])
 	prop.consume()
@@ -999,6 +1153,7 @@ func apply_site_state(id: String, progress: float, resourced: bool, committed: D
 		var bar: ProgressIndicator3D = construction_visuals[id]["bar"]
 		bar.set_progress(progress)
 		bar.set_bar_color(Color(0.6, 0.6, 0.65) if resourced else Color(0.85, 0.35, 0.25))
+		bar.set_status_text(_site_status_text(construction_sites[id]))
 
 func is_site_resourced(id: String) -> bool:
 	if not construction_sites.has(id):
@@ -1020,14 +1175,41 @@ func mark_prop_collected(prop_name: String, feedback: bool = true) -> void:
 		if feedback:
 			on_prop_collected(prop)
 
-# Toggle between building mode and movement mode
+# Toggle interact mode (Tab). Leaving it also leaves delete mode.
 
 func action_interact_mode():
 	if InputMap.has_action("interact_mode") and Input.is_action_just_pressed("interact_mode"):
 		interact_mode = !interact_mode
+		_set_delete_mode(false)
 		selector.visible = interact_mode
 		if Audio:
 			Audio.play("sounds/toggle.ogg", -30)
+
+# Backspace, while in interact mode, switches from building to delete mode. B (below) switches back.
+
+func action_delete_mode():
+	if interact_mode and not delete_mode and InputMap.has_action("demolish") and Input.is_action_just_pressed("demolish"):
+		_set_delete_mode(true)
+		if Audio:
+			Audio.play("sounds/toggle.ogg", -30)
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if delete_mode and event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_B:
+		_set_delete_mode(false)
+		if Audio:
+			Audio.play("sounds/toggle.ogg", -30)
+		get_viewport().set_input_as_handled()
+
+func _set_delete_mode(on: bool) -> void:
+	if delete_mode == on:
+		return
+	delete_mode = on
+	if selector != null:
+		selector.visible = interact_mode and not delete_mode # no placement ghost while deleting
+	if not on:
+		build_hint_timer = 0.0
+		if build_hint_label != null:
+			build_hint_label.visible = false
 
 # Rotates the 'cursor' 90 degrees
 
@@ -1177,51 +1359,79 @@ func _flash_build_hint(text: String) -> void:
 		build_hint_label.visible = true
 		build_hint_timer = BUILD_HINT_DURATION
 
-# --- Save / load -------------------------------------------------------------
+# --- Save / load support -------------------------------------------------------
+# The saving and loading itself lives in SaveManager (scripts/save_manager.gd, a node in main.tscn); these are the
+# Builder-side pieces it needs. Everything is saved by NAME (item_name, node name), never by index.
 
-func action_save():
-	if Input.is_action_just_pressed("save") and not Globals.online_client:
-		print("Saving map...")
+var felled_objects: Array[String] = [] # names of hand-placed trees chopped down this game, so a load can fell them again
 
-		map.structures.clear()
-		for id in placed_structures.keys():
-			var entry = placed_structures[id]
-			if entry.has("node"):
-				continue # free-standing objects (trees) aren't saved yet
-			var data_structure := DataStructure.new()
-			data_structure.position = entry["position"]
-			data_structure.rotation_y = entry["rotation_y"]
-			data_structure.structure = entry["structure_index"]
-
-			map.structures.append(data_structure)
-
-		ResourceSaver.save(map, "user://map.res")
-
-		print("Map saved.")
-
-func action_load():
-	if Input.is_action_just_pressed("load") and not Globals.online_client:
-		print("Loading map...")
-
-		_load_from(ResourceLoader.load("user://map.res"))
-
-		print("Map loaded.")
-
-func _load_from(loaded_map: DataMap) -> void:
+func clear_placed_structures() -> void:
 	_clear_all_placed_structures()
-
-	map = loaded_map
-	if not map:
-		map = DataMap.new()
-
-	for data_structure in map.structures:
-		_place_structure(data_structure.structure, world_to_cell(data_structure.position), data_structure.rotation_y)
 
 func _clear_all_placed_structures() -> void:
 	for id in placed_structures.keys().duplicate():
 		if placed_structures[id].has("node"):
 			continue # trees stay where they are
 		remove_structure_instance(id)
+
+## The index in `structures` of the building whose MeshLibrary item has this name (-1 if this build no longer has it)
+func structure_index_for_name(item_name: String) -> int:
+	if item_name == "":
+		return -1
+	for i in structures.size():
+		if structures[i].scene == null and structures[i].item_name == item_name:
+			return i
+	return -1
+
+func restore_structure(structure_index: int, pos: Vector3, rotation_y: float) -> void:
+	_place_structure(structure_index, world_to_cell(pos), rotation_y)
+
+## Re-creates a half-built site with the labour and resources already put into it
+func restore_site(structure_index: int, pos: Vector3, rotation_y: float, progress: float, committed: Dictionary) -> void:
+	var cell := world_to_cell(pos)
+	_start_construction(cell, rotation_y, structure_index)
+	var id := "c_%d_%d_%d" % [cell.x, cell.y, cell.z]
+	apply_site_state(id, progress, is_site_resourced(id), committed)
+
+## A log / fruit lying where the save says (dropped a hair above the ground; it tidies onto its pile by itself)
+func restore_prop(resource_type: String, amount: int, pos: Vector3, rot: Vector3) -> void:
+	if resource_type == "":
+		return
+	_prop_counter += 1
+	var prop_name := "Prop_%d" % _prop_counter
+	var at := pos + Vector3.UP * 0.05
+	_create_prop(prop_name, resource_type, amount, at, rot, false)
+	_net("prop_spawn", [prop_name, resource_type, amount, at, rot])
+
+## A tree planted in-game, found again by the scene it was made from
+func restore_planted(scene_path: String, pos: Vector3, yaw: float) -> Node3D:
+	for structure in structures:
+		if structure.scene != null and structure.scene.resource_path == scene_path:
+			return _plant_object(structure, pos, "", fposmod(yaw, TAU))
+	return null
+
+func restore_citizen(info: Dictionary) -> void:
+	var c = citizen_scene.instantiate()
+	_citizen_counter += 1
+	c.name = "Citizen_%d" % _citizen_counter
+	var d := CitizenData.new()
+	d.id = String(info.get("id", d.id))
+	d.citizen_name = String(info.get("name", d.citizen_name))
+	d.age = int(info.get("age", d.age))
+	d.energy = float(info.get("energy", d.energy))
+	d.job = String(info.get("job", ""))
+	d.job_task = int(info.get("job_task", Structure.JobTask.NONE))
+	d.workplace_id = String(info.get("workplace_id", ""))
+	d.job_satisfaction = float(info.get("job_satisfaction", d.job_satisfaction))
+	d.happiness = float(info.get("happiness", d.happiness))
+	d.housing_satisfaction = float(info.get("housing_satisfaction", d.housing_satisfaction))
+	d.approval = float(info.get("approval", d.approval))
+	c.data = d # before add_child: Citizen._ready only makes its own data when there is none
+	add_child(c)
+	c.global_position = info.get("position", Vector3.ZERO)
+	c.health = float(info.get("health", c.health))
+	c.energy = float(info.get("body_energy", c.energy))
+	citizens.append(c)
 
 func spawn_citizens(count: int):
 	for i in count:
@@ -1274,7 +1484,9 @@ func get_nearest_gatherable(pos: Vector3, resource_type: String = "", exclude: D
 			continue
 		if resource_type != "" and structures[structure_index].resource_type != resource_type:
 			continue
-
+		var candidate = entry.get("node")
+		if candidate is Gatherable and is_instance_valid(candidate) and candidate.is_depleted():
+			continue # a bare bush has nothing left
 		var dist = pos.distance_squared_to(entry["position"])
 		if dist < nearest_dist:
 			nearest_dist = dist
@@ -1324,11 +1536,47 @@ func _get_prop_visual(resource_type: String) -> Dictionary:
 				xform = (p as Node3D).transform * xform
 				p = p.get_parent()
 			result = {"mesh": mi.mesh, "xform": xform}
+			# A collider authored in the scene (e.g. the cylinder in log.tscn) wins over a hull computed from the mesh
+			var shapes := root.find_children("*", "CollisionShape3D", true, false)
+			if not shapes.is_empty() and (shapes[0] as CollisionShape3D).shape != null:
+				var cs := shapes[0] as CollisionShape3D
+				var shape_xform := cs.transform
+				var sp := cs.get_parent()
+				while sp is Node3D and sp != root:
+					shape_xform = (sp as Node3D).transform * shape_xform
+					sp = sp.get_parent()
+				result["shape"] = cs.shape
+				result["shape_xform"] = shape_xform
 		else:
 			push_warning("Builder: resource_prop_meshes[%s] has no MeshInstance3D -- using the placeholder sphere." % resource_type)
 		root.free()
 	_prop_visuals[resource_type] = result
 	return result
+
+# Picks one fruit off a bush: it lets go from where it hung and is returned as a loose prop (null if the bush is bare),
+# ready for the picker to grab -- the player with E, a citizen's fruit run.
+func pick_bush_fruit(bush: Gatherable) -> ResourceProp:
+	if bush == null or not is_instance_valid(bush) or bush.structure == null:
+		return null
+	var spot := bush.take_fruit()
+	if spot == Vector3.INF:
+		return null
+	spawn_resource_prop(spot, bush.structure.secondary_resource_type, 1, true)
+	return get_node_or_null(NodePath("Prop_%d" % _prop_counter)) as ResourceProp
+
+# The nearest bush with fruit on it within `max_dist` (a 3D sphere, height counts) of a position, or null
+func nearest_pickable_bush(pos: Vector3, max_dist: float) -> Gatherable:
+	var best: Gatherable = null
+	var best_d := max_dist * max_dist
+	for node in get_tree().get_nodes_in_group("gatherable"):
+		var bush := node as Gatherable
+		if bush == null or not bush.pick_fruit_only or bush.is_depleted():
+			continue
+		var d := pos.distance_squared_to(bush.global_position)
+		if d < best_d:
+			best_d = d
+			best = bush
+	return best
 
 func spawn_resource_prop(world_pos: Vector3, resource_type: String, amount: int = 1, exact := false) -> void:
 	if resource_type == "" or amount <= 0:
@@ -1336,6 +1584,11 @@ func spawn_resource_prop(world_pos: Vector3, resource_type: String, amount: int 
 	_prop_counter += 1
 	# exact: appear precisely at world_pos (a fruit letting go of its branch) instead of scattered around it just above the ground
 	var pos := world_pos if exact else world_pos + Vector3(randf_range(-0.4, 0.4), RESOURCE_SPAWN_HEIGHT, randf_range(-0.4, 0.4))
+	if not exact and stacked_resource_types.has(resource_type):
+		# Logs now collide with the trunk they came from: start them in a ring just outside it, not inside it
+		var angle := randf() * TAU
+		var ring := randf_range(0.9, 1.4)
+		pos = world_pos + Vector3(cos(angle) * ring, RESOURCE_SPAWN_HEIGHT, sin(angle) * ring)
 	var rot := Vector3(randf_range(0, TAU), randf_range(0, TAU), randf_range(0, TAU))
 	var prop_name := "Prop_%d" % _prop_counter
 	_create_prop(prop_name, resource_type, amount, pos, rot, false)
@@ -1346,10 +1599,23 @@ func spawn_resource_prop(world_pos: Vector3, resource_type: String, amount: int 
 func _create_prop(prop_name: String, resource_type: String, amount: int, pos: Vector3, rot: Vector3, puppet: bool) -> void:
 	if get_node_or_null(NodePath(prop_name)) != null:
 		return # already there (a late joiner's catch-up can repeat an event)
+	var scene: PackedScene = resource_prop_scenes.get(resource_type)
+	if scene != null:
+		var scene_prop := scene.instantiate() as ResourceProp
+		if scene_prop != null:
+			_finish_prop(scene_prop, prop_name, resource_type, amount, pos, rot, puppet)
+			return
+		push_warning("Builder: resource_prop_scenes[%s] is not a RigidBody3D with resource_prop.gd -- using the fallback." % resource_type)
 	var prop := ResourceProp.new() # a RigidBody3D that already carries resource_prop.gd
-	prop.name = prop_name
-	prop.is_puppet = puppet
 	prop.mass = RESOURCE_PROP_MASS
+	if not stacked_resource_types.has(resource_type):
+		# Fallback for a small type with no scene: collides with the ground / logs and other small props, never with people
+		prop.collision_layer = SMALL_PROP_LAYER
+		prop.collision_mask = 1 | SMALL_PROP_LAYER
+	else:
+		# Logs also collide with trees and stumps (layer 2, their trunks), so they stop against them instead of sliding
+		# through -- and can't get wedged inside a cluster of trunks.
+		prop.collision_mask = 1 | 2
 
 	var mesh_instance := MeshInstance3D.new()
 	var collider := CollisionShape3D.new()
@@ -1358,10 +1624,14 @@ func _create_prop(prop_name: String, resource_type: String, amount: int, pos: Ve
 	if mesh != null:
 		mesh_instance.mesh = mesh
 		mesh_instance.transform = visual["xform"]
-		if not _prop_shapes.has(resource_type):
-			_prop_shapes[resource_type] = mesh.create_convex_shape(true, true)
-		collider.shape = _prop_shapes[resource_type]
-		collider.transform = visual["xform"]
+		if visual.has("shape"):
+			collider.shape = visual["shape"]
+			collider.transform = visual["shape_xform"]
+		else:
+			if not _prop_shapes.has(resource_type):
+				_prop_shapes[resource_type] = mesh.create_convex_shape(true, true)
+			collider.shape = _prop_shapes[resource_type]
+			collider.transform = visual["xform"]
 	else:
 		var sphere := SphereMesh.new()
 		sphere.radius = 0.15
@@ -1370,12 +1640,17 @@ func _create_prop(prop_name: String, resource_type: String, amount: int, pos: Ve
 		var mat := StandardMaterial3D.new()
 		mat.albedo_color = Color(0.85, 0.25, 0.2) if resource_type == "food" else Color(0.7, 0.7, 0.7)
 		mesh_instance.set_surface_override_material(0, mat)
-		var box := BoxShape3D.new()
-		box.size = Vector3(0.3, 0.3, 0.3)
-		collider.shape = box
+		var ball := SphereShape3D.new() # fits the sphere mesh above
+		ball.radius = 0.15
+		collider.shape = ball
 	prop.add_child(mesh_instance)
 	prop.add_child(collider)
+	_finish_prop(prop, prop_name, resource_type, amount, pos, rot, puppet)
 
+# Names, tags and places a freshly built prop (from a scene or from code) and drops it into the world
+func _finish_prop(prop: ResourceProp, prop_name: String, resource_type: String, amount: int, pos: Vector3, rot: Vector3, puppet: bool) -> void:
+	prop.name = prop_name
+	prop.is_puppet = puppet # must be set before it enters the tree
 	prop.add_to_group("resource_prop")
 	prop.set_meta("resource_type", resource_type)
 	prop.set_meta("amount", amount)
@@ -1436,6 +1711,7 @@ func _process_construction(delta: float) -> void:
 				bar.set_bar_color(Color(0.6, 0.6, 0.65)) # neutral grey-blue -- resourced
 			else:
 				bar.set_bar_color(Color(0.85, 0.35, 0.25)) # stalled -- missing resources
+			bar.set_status_text(_site_status_text(site))
 
 		if not fully_committed:
 			continue # waiting on the stockpile -- builders stand by, no progress yet
@@ -1500,6 +1776,17 @@ func _commit_resources(site: ConstructionSite, structure: Structure) -> void:
 		site.resources_committed[resource_type] = already + to_draw
 		_consume_stacked_logs(resource_type, to_draw)
 
+# Text over a site's bar while it still lacks materials, e.g. "2/5 logs" (committed / needed); "" once fully supplied
+func _site_status_text(site: ConstructionSite) -> String:
+	var structure := structures[site.structure_index]
+	for resource_type in structure.build_cost.keys():
+		var needed: int = structure.build_cost[resource_type]
+		var committed: int = site.resources_committed.get(resource_type, 0)
+		if committed < needed:
+			var label := "logs" if String(resource_type) == "wood" else String(resource_type)
+			return "%d/%d %s" % [committed, needed, label]
+	return ""
+
 func _resources_fully_committed(site: ConstructionSite, structure: Structure) -> bool:
 	for resource_type in structure.build_cost.keys():
 		var needed: int = structure.build_cost[resource_type]
@@ -1552,6 +1839,60 @@ func get_nearest_construction_site(pos: Vector3) -> String:
 
 	return nearest_id
 
+## Height (m) above a construction site's floor that counts as part of the site when working out its on-screen region,
+## so aiming at the upper part of a half-built hut still counts.
+@export var site_pick_height := 8.0
+## Extra pixels around a site's on-screen region in which the crosshair / cursor still counts as over it.
+@export var site_pick_padding_px := 24.0
+
+## The on-screen region (viewport pixels) covered by a construction site: the bounding rectangle of its cell, from the floor
+## up to site_pick_height, projected through the camera. An empty Rect2 if the site is behind the camera.
+func site_screen_rect(site_id: String) -> Rect2:
+	if view_camera == null or world == null or not construction_sites.has(site_id):
+		return Rect2()
+	var centre: Vector3 = construction_sites[site_id].position
+	var half := world.cell_size.x * 0.5
+	var min_p := Vector2(INF, INF)
+	var max_p := Vector2(-INF, -INF)
+	var any := false
+	for dx in [-half, half]:
+		for dz in [-half, half]:
+			for h in [0.0, site_pick_height]:
+				var p := centre + Vector3(dx, h, dz)
+				if view_camera.is_position_behind(p):
+					continue
+				var s := view_camera.unproject_position(p)
+				min_p = min_p.min(s)
+				max_p = max_p.max(s)
+				any = true
+	if not any:
+		return Rect2()
+	return Rect2(min_p, max_p - min_p).grow(site_pick_padding_px)
+
+## True while a screen point (the crosshair, or the mouse cursor) is over a construction site's on-screen region
+func screen_point_over_site(site_id: String, screen_pos: Vector2) -> bool:
+	var rect := site_screen_rect(site_id)
+	return rect.has_area() and rect.has_point(screen_pos)
+
+## The construction site whose on-screen region contains screen_pos and whose cell is within `reach` (flat) of `from_pos`;
+## the nearest to the camera if several overlap. NO_ID if none. Replaces a physics ray + ground-point match for sites.
+func pick_site_in_screen(screen_pos: Vector2, from_pos: Vector3, reach: float) -> String:
+	if view_camera == null:
+		return NO_ID
+	var best := NO_ID
+	var best_dist := INF
+	for id in construction_sites.keys():
+		var site_pos: Vector3 = construction_sites[id].position
+		if flat_distance(site_pos, from_pos) > reach:
+			continue
+		if not screen_point_over_site(id, screen_pos):
+			continue
+		var d := view_camera.global_position.distance_to(site_pos)
+		if d < best_dist:
+			best_dist = d
+			best = id
+	return best
+
 func assign_builder_to_site(citizen_id: String, site_id: String) -> bool:
 	if Globals.online_client and citizen_id == PLAYER_BUILDER_ID:
 		Globals.world_sync.req_assign_builder(site_id) # the server keeps the list of builders
@@ -1603,7 +1944,7 @@ func update_gather_progress(id: String, progress01: float) -> void:
 			bar.global_position = node.get_progress_position()
 		else:
 			bar.global_position = pos + Vector3(0, GATHER_BAR_HEIGHT, 0)
-		bar.bar_color = Color(0.8, 0.4, 0.1) # matches citizen HungerBar orange
+		bar.bar_color = Color(1.0, 0.8, 0.3, 1.0)
 		gather_visuals[id] = bar
 	gather_visuals[id].set_progress(progress01)
 	# A tree with fruit hanging on it lets go of one per share of progress (see Gatherable.fruit_container)
@@ -1619,7 +1960,7 @@ func clear_gather_progress(id: String) -> void:
 
 # --- Chop progress (persisted) ---------------------------------------------
 
-func add_chop_progress(id: String, amount: float) -> Dictionary:
+func add_chop_progress(id: String, amount: float, picking := false) -> Dictionary:
 	if Globals.online_client:
 		# The server does the chopping: send it what we put in; the result (tree gone, energy bonus) comes back
 		if placed_structures.has(id):
@@ -1633,6 +1974,18 @@ func add_chop_progress(id: String, amount: float) -> Dictionary:
 	var structure = structures[structure_index]
 	if not structure.gatherable:
 		return {"completed": false, "energy_bonus": 0.0}
+
+	# A bush isn't chopped by citizens: each full gather_time of work (picking = true) picks ONE fruit, no progress bar, and the
+	# bush stays. The player (picking = false) chops it down like a tree.
+	var bush = placed_structures[id].get("node")
+	if picking and bush is Gatherable and is_instance_valid(bush) and bush.pick_fruit_only:
+		var picked: float = gather_progress.get(id, 0.0) + amount
+		if picked < 1.0:
+			gather_progress[id] = picked
+			return {"completed": false, "energy_bonus": 0.0}
+		gather_progress.erase(id)
+		pick_bush_fruit(bush)
+		return {"completed": true, "energy_bonus": 0.0}
 
 	var previous_progress: float = gather_progress.get(id, 0.0)
 	var progress = clamp(previous_progress + amount, 0.0, 1.0)
@@ -1666,6 +2019,8 @@ func _spawn_incremental_resource_props(id: String, structure: Structure, prev_pr
 		hanging = tree.get_fruit_count()
 	if hanging > 0 and structure.secondary_resource_type != "":
 		for i in range(floori(prev_progress * hanging), floori(new_progress * hanging)):
+			if tree.is_fruit_picked(i):
+				continue # already picked by hand
 			spawn_resource_prop(tree.get_fruit_position(i), structure.secondary_resource_type, 1, true)
 		_spawn_units_between(world_pos, structure.resource_type, _get_rolled_yields(id, structure)["primary"], prev_progress, new_progress)
 		return

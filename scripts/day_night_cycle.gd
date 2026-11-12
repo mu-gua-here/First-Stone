@@ -42,6 +42,16 @@ class_name DayNightCycle
 @export_group("Ambient")
 @export var noon_ambient_color: Color = Color(0.662745, 0.694118, 0.772549)
 @export var night_ambient_color: Color = Color(0.16, 0.19, 0.30)
+## Multipliers on the ambient energy authored in the Environment resource (read once per environment,
+## so native and compat each keep their own base). Day > 1 brightens daytime, night < 1 darkens the night.
+@export var noon_ambient_energy_mult: float = 0.6
+@export var night_ambient_energy_mult: float = 0.3
+## Extra ambient while the sun is near the horizon (dawn/dusk), when the sun alone leaves a lot dark.
+## Added on top of the day/night multiplier, so ambient is strongest when the sun is weakest.
+@export var horizon_ambient_energy_bonus: float = 0.5
+## Extra brightness per renderer, multiplied onto all ambient. The web (Compatibility) build renders darker, so it gets more.
+@export var native_ambient_boost: float = 1.0
+@export var compat_ambient_boost: float = 1.8
 @export var noon_bg_color: Color = Color(0.560784, 0.592157, 0.670588)
 @export var night_bg_color: Color = Color(0.02, 0.02, 0.05)
 
@@ -59,8 +69,22 @@ class_name DayNightCycle
 @export_group("Fog")
 @export var noon_fog_color: Color = Color(0.860812, 0.8745884, 0.897545)
 @export var night_fog_color: Color = Color(0.05, 0.06, 0.1)
-@export var noon_fog_density: float = 0.015
-@export var night_fog_density: float = 0.035
+@export var noon_fog_density: float = 0.8
+@export var night_fog_density: float = 0.5
+## The environments use DEPTH fog (fog_mode = 1). In depth mode fog_density is the fog's MAXIMUM opacity (1.0 = fully hides
+## the scene at fog_depth_end, 0.0 = no fog at all) and begin/end set how far away it ramps in. A low noon density is
+## what made the fog look absent in daylight.
+@export var noon_fog_depth_begin: float = 20.0
+@export var noon_fog_depth_end: float = 200.0
+@export var night_fog_depth_begin: float = 2.0
+@export var night_fog_depth_end: float = 45.0
+## Per-renderer fog strength. Higher = thicker fog (fog starts and ends closer: begin/end above are divided by it).
+## Depth fog's curve is authored in each environment resource.
+@export var native_fog_distance_mult: float = 1.0
+@export var compat_fog_distance_mult: float = 1.0
+## The ocean's ShaderMaterial (the one on WaterSurface). The ocean is transparent, so engine fog can't fade it out; the
+## water shader does its own fog instead, fed from the active Environment's fog values here.
+@export var ocean_material: ShaderMaterial
 
 # Set by other scripts (view.gd) to stop this script's own fog lerp from
 # fighting theirs -- e.g. while the camera is underwater.
@@ -68,20 +92,48 @@ var suppress_fog := false
 
 # Writing to ProceduralSkyMaterial properties forces Godot to re-bake the sky
 # radiance/reflection map that frame -- very expensive (measured ~23% of CPU
-# frame time on web export). day_pct barely changes frame-to-frame with a
-# multi-minute day length, so only push the update when it's moved enough to
-# actually be visible.
+# frame time on web export)
 var _last_sky_day_pct: float = -1.0
+# Ambient energy authored in whichever Environment is active (main.gd swaps it for compat after our _ready)
+var _ambient_env: Environment
+var _base_ambient_energy := 1.0
 # Change update time interval based on renderer, since web is weaker
 var SKY_UPDATE_THRESHOLD := 0.01 if OS.has_feature("web") else 0.001
+var _fog_mult: float = 1.0
+var _ambient_boost: float = 1.0
+
+# Sky-only twins of the sun/moon. The procedural sky multiplies the whole sky (discs included) by
+# sky_energy_multiplier, which is ~0.15 at dawn/dusk/night, so the real lights draw near-black discs.
+# These extra lights shine ONLY on the sky (no scene lighting) and are boosted to cancel that dimming.
+# The real sun/moon are switched to Light Only so each disc is drawn once.
+const SUN_DISC_BRIGHTNESS := 3.0
+const MOON_DISC_BRIGHTNESS := 2.0
+var _sun_disc: DirectionalLight3D
+var _moon_disc: DirectionalLight3D
 
 func _ready() -> void:
 	if moon == null:
 		moon = DirectionalLight3D.new()
 		moon.name = "Moon"
 		add_child(moon)
+	_sun_disc = _make_sky_disc("SunDisc")
+	_moon_disc = _make_sky_disc("MoonDisc")
+	if sun:
+		sun.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
+	moon.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
 	time_of_day = start_time
+	_fog_mult = maxf(compat_fog_distance_mult if RenderingServer.get_current_rendering_method() == "gl_compatibility" else native_fog_distance_mult, 0.01)
+	_ambient_boost = compat_ambient_boost if RenderingServer.get_current_rendering_method() == "gl_compatibility" else native_ambient_boost
 	_apply(time_of_day)
+
+
+func _make_sky_disc(disc_name: String) -> DirectionalLight3D:
+	var l := DirectionalLight3D.new()
+	l.name = disc_name
+	l.sky_mode = DirectionalLight3D.SKY_MODE_SKY_ONLY
+	l.shadow_enabled = false
+	add_child(l)
+	return l
 
 
 func _process(delta: float) -> void:
@@ -103,8 +155,9 @@ func _apply(t: float) -> void:
 	var day_pct: float = clamp(height, 0.0, 1.0)
 	var horizon_pct: float = clamp(1.0 - abs(height) * 4.0, 0.0, 1.0)
 	
-	# print(time_of_day)
-	
+	# NOTE: ambient energy is written once, below (as a multiplier on the environment's authored base).
+	# A second write here used to corrupt that base, so ambient/tonemap never behaved predictably.
+
 	if sun:
 		sun.rotation.x = angle + PI / 2.0
 
@@ -125,16 +178,28 @@ func _apply(t: float) -> void:
 			moon.light_energy = lerp(moon_day_fill_energy, moon_light_energy, night_pct)
 			moon.shadow_enabled = moon_shadows and night_pct > 0.5
 			moon.visible = moon.light_energy > 0.001
+
+		# Boosted sky-only discs: brightness / sky multiplier cancels the sky dimming.
+		var sky_mult := maxf(lerp(night_sky_energy, noon_sky_energy, day_pct), 0.01)
+		_sun_disc.global_basis = sun.global_basis
+		_sun_disc.light_color = sun.light_color
+		_sun_disc.light_energy = SUN_DISC_BRIGHTNESS / sky_mult
+		if moon and moon.is_inside_tree():
+			_moon_disc.global_basis = moon.global_basis
+			_moon_disc.light_color = moon_light_color
+			_moon_disc.light_energy = MOON_DISC_BRIGHTNESS / sky_mult
 	if world_environment and world_environment.environment:
 		var env := world_environment.environment
+		if env != _ambient_env:
+			_ambient_env = env
+			_base_ambient_energy = env.ambient_light_energy
 		env.ambient_light_color = night_ambient_color.lerp(noon_ambient_color, day_pct)
+		env.ambient_light_energy = _base_ambient_energy * _ambient_boost * (lerp(night_ambient_energy_mult, noon_ambient_energy_mult, day_pct) + horizon_ambient_energy_bonus * horizon_pct)
 		env.background_color = night_bg_color.lerp(noon_bg_color, day_pct)
 
 		# Sky reactivity -- only does anything when background_mode is Sky with a
-		# ProceduralSkyMaterial assigned (see the Sky export group above for why).
-		# Gated behind SKY_UPDATE_THRESHOLD: every write to a ProceduralSkyMaterial
-		# property forces a full sky radiance re-bake that frame, so we skip the
-		# write entirely unless day_pct has moved enough to be visible.
+		# ProceduralSkyMaterial assigned
+		# Gated behind SKY_UPDATE_THRESHOLD
 		if env.sky and env.sky.sky_material is ProceduralSkyMaterial \
 				and absf(day_pct - _last_sky_day_pct) >= SKY_UPDATE_THRESHOLD:
 			var sky_mat: ProceduralSkyMaterial = env.sky.sky_material
@@ -145,8 +210,15 @@ func _apply(t: float) -> void:
 			_last_sky_day_pct = day_pct
 
 		# Fog reactivity -- thicker and bluer at night, thin and warm at noon.
-		# Skipped while suppress_fog is set (e.g. by view.gd while the camera's
-		# underwater) so day/night cycling doesn't fight the underwater tint.
+		# Skipped while view.gd while the camera is underwater
 		if not suppress_fog:
 			env.fog_light_color = night_fog_color.lerp(noon_fog_color, day_pct)
 			env.fog_density = lerp(night_fog_density, noon_fog_density, day_pct)
+			env.fog_depth_begin = lerp(night_fog_depth_begin, noon_fog_depth_begin, day_pct) / _fog_mult
+			env.fog_depth_end = lerp(night_fog_depth_end, noon_fog_depth_end, day_pct) / _fog_mult
+			if ocean_material != null:
+				ocean_material.set_shader_parameter("env_fog_color", env.fog_light_color)
+				ocean_material.set_shader_parameter("env_fog_begin", env.fog_depth_begin)
+				ocean_material.set_shader_parameter("env_fog_end", env.fog_depth_end)
+				ocean_material.set_shader_parameter("env_fog_curve", env.fog_depth_curve)
+				ocean_material.set_shader_parameter("env_fog_density", env.fog_density if env.fog_enabled else 0.0)

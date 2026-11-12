@@ -1,6 +1,9 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://c77jy7ldm4vps"]
 
-[ext_resource type="Script" path="res://scripts/demolish_ring_3d.gd" id="1_ring"]
+[ext_resource type="Script" uid="uid://dlgkgc0lb73kg" path="res://scripts/demolish_ring_3d.gd" id="1_ring"]
+
+[sub_resource type="ViewportTexture" id="ViewportTexture_ring"]
+viewport_path = NodePath("Sprite3D/SubViewport")
 
 [sub_resource type="Gradient" id="Gradient_ring"]
 offsets = PackedFloat32Array(0, 0.6, 0.66, 0.96, 1)
@@ -14,24 +17,21 @@ fill = 1
 fill_from = Vector2(0.5, 0.5)
 fill_to = Vector2(1, 0.5)
 
-[sub_resource type="ViewportTexture" id="ViewportTexture_ring"]
-viewport_path = NodePath("Sprite3D/SubViewport")
-
-[node name="DemolishRing3D" type="Node3D"]
+[node name="DemolishRing3D" type="Node3D" unique_id=68536989]
 script = ExtResource("1_ring")
 
-[node name="Sprite3D" type="Sprite3D" parent="."]
+[node name="Sprite3D" type="Sprite3D" parent="." unique_id=2035650087]
 pixel_size = 0.012
 billboard = 1
 no_depth_test = true
 render_priority = 127
 texture = SubResource("ViewportTexture_ring")
 
-[node name="SubViewport" type="SubViewport" parent="Sprite3D"]
+[node name="SubViewport" type="SubViewport" parent="Sprite3D" unique_id=63891137]
 transparent_bg = true
 size = Vector2i(128, 128)
 
-[node name="Ring" type="TextureProgressBar" parent="Sprite3D/SubViewport"]
+[node name="Ring" type="TextureProgressBar" parent="Sprite3D/SubViewport" unique_id=679986101]
 offset_right = 128.0
 offset_bottom = 128.0
 max_value = 1.0

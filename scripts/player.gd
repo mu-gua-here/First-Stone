@@ -8,11 +8,7 @@ extends Carrier
 ## "[E] Grab" prompt shown near small pick-up items (fruit); a Label in player.tscn
 @export var grab_hint: Label
 const GRAB_REACH := 1.8
-const TAKE_LOG_HOLD := 0.8 # seconds E must be held on a woodpile log to take it
-var _take_hold_start := -1 # msec when the current hold began (-1 = not holding)
-var _pile_hover: ResourceProp # the woodpile log under the crosshair, outlined
-var _pile_hover_meshes: Array[MeshInstance3D] = []
-var _outline_material: Material # borrowed from the CitizenSelector so both outlines look the same
+const BUSH_PICK_REACH := 2.6 # flat distance to a bush's centre from which E picks its fruit (the bush itself is ~1.4 wide)
 var _held_props: Array = [] # ResourceProps carried overhead, oldest first (up to ResourceProp.MAX_CARRY)
 var _held_prop_names: Array = [] # online client: names of the props the server let us pick up (some still optimistic)
 
@@ -28,7 +24,8 @@ const NO_ID := Builder.NO_ID
 # Gathering / building (click-and-hold). A non-empty target id means the task is active.
 var gather_target_id: String = NO_ID
 var build_target_id: String = NO_ID
-var demolish_target_id: String = NO_ID # structure / site being taken apart (hold Del + click and hold it)
+var _build_assigned := false # true while the crosshair / cursor is over the site being built (see _update_building_task)
+var demolish_target_id: String = NO_ID # structure / site being taken apart (delete mode, click and hold it)
 
 var spawn_point: Vector3
 
@@ -40,9 +37,6 @@ var spawn_point: Vector3
 
 # Player physical movement
 @export_category("Physics")
-@export var SPEED := 4.0
-@export var RUN_SPEED := 6.0
-@export var SWIM_SPEED := 0.5
 @export var JUMP_HEIGHT := 7.0
 ## Hold jump to keep accelerating upward (up to JUMP_HOLD_TIME seconds). Letting go just stops adding
 ## acceleration -- you keep the upward speed you have and gravity takes over, you are NOT stopped.
@@ -50,42 +44,15 @@ var spawn_point: Vector3
 @export var JUMP_HOLD_TIME := 0.25
 var _jumping := false # true while rising from a jump the player started (so the walking hop isn't boosted)
 var _jump_held_for := 0.0
-@export var FRICTION := 0.8
 @export var BOUNCE_HEIGHT := 5.0
 var bounce_active := false
 
-@export_category("Mechanics")
-@export var hunger_dmg := 0.01
-
-# Player physiological settings. health / max_health / fall damage / dying live in Carrier (shared with
-# citizens). Assign to energy directly -- the setter clamps and emits energy_changed.
-@export_category("Physiology")
-@export var max_energy: float = 100.0
-@export var heal_rate := 0.1
-@export var heal_energy := 0.05
-
-## Below this much health & energy the player starts to slow down (and jump / swim weaker), reaching a standstill at 0.
-## Stacks multiplicatively with the low-energy slowdown, so being low on both is much worse than either.
-@export var slow_below_health := 50.0
-@export var slow_below_energy := 50.0
-
-@export_range(0.0, 100.0) var energy: float = 100.0:
-	set(value):
-		var clamped := clampf(value, 0.0, 100.0)
-		if clamped == energy:
-			return
-		energy = clamped
-		energy_changed.emit(energy, 100.0)
 @export var invuln_time: float = 0.5  # seconds of immunity after being hit
 var invuln_timer: float = 0.0
-@export var metabolism: float = 0.01
-@export var move_energy := 0.1
 
 # Knockback
 var knockback: Vector3 = Vector3.ZERO
 const KNOCKBACK_FRICTION = 6.0  # how fast knockback decays per second
-
-signal energy_changed(current: float, max: float)
 
 func _ready():
 	spawn_point = global_position
@@ -155,19 +122,32 @@ func _physics_process(delta: float) -> void:
 	var wanted := Vector3(direction.x, 0.0, direction.z) * speed * (vitality_mult if dev_mode else 1.0)
 
 	if dev_mode:
-		# Free-fly: ease straight toward the wanted 3D velocity. (The old `velocity *= FRICTION` every physics
-		# tick fought the steering and left dev mode crawling.)
+		# Free-fly: ease straight toward the wanted 3D velocity
 		velocity = velocity.lerp(direction * speed, 1.0 - exp(-DEV_ACCEL * delta))
 	else:
 		# Send to carrier.gd to incorporate horizontal physics
 		steer_horizontal(wanted, delta)
+		
+		if wanted.length() > 0.0:
+			# Subtract energy when movement is done
+			if in_fluid: energy -= move_energy * delta
+			else: energy -= swim_energy * delta
+	
+	# Heal player if not at max health
+	if health < 100.0 and energy > 30.0:
+		health += heal_rate * delta
+		energy -= heal_energy * delta
+	
+	energy -= metabolism * delta
+	
+	# Start eating away at health once at critical levels
+	if energy < 30.0:
+		health -= hunger_dmg * delta
 	
 	if in_fluid:
 		# Scaled by vertical/horizontal drag so top swim speed is unchanged now that vertical drag is weaker.
 		# Letting go of swim up/down just stops adding acceleration: you coast and slow down gradually.
 		velocity.y += direction.y * SWIM_SPEED * (2 - int(dev_mode)) * vitality_mult * (fluid_vertical_damp / fluid_damp)
-		# Subtract energy when movement is done by player
-		energy -= move_energy * delta
 	
 	# Small bounce animation while walking (skipped on the frame a jump already set velocity.y)
 	if is_on_floor() and not dev_mode:
@@ -177,10 +157,6 @@ func _physics_process(delta: float) -> void:
 				if temp_vel >= 2.0:
 					velocity.y += temp_vel
 					bounce_active = true
-	
-	# Start eating away at health once at critical levels
-	if energy < 0.1:
-		health -= hunger_dmg * delta
 	
 	# Knockback from attackers, decaying over time
 	if knockback.length() > 0.01:
@@ -207,12 +183,6 @@ func _physics_process(delta: float) -> void:
 	
 	_push_colliding_bodies() # move any moveable objects on player collision
 	
-	# Heal player if not at max health
-	if health < 100.0 and energy > 30.0:
-		health += heal_rate * delta
-		energy -= heal_energy * delta
-	
-	energy -= metabolism * delta
 	_update_eating(delta)
 
 # --- Eating ---
@@ -273,25 +243,29 @@ func _update_grab() -> void:
 		var held_prop := _held_props[i] as ResourceProp
 		if not is_instance_valid(held_prop) or held_prop.collected:
 			_held_props.remove_at(i) # collected / gone: the stack closes up
+	var carry_forward := Vector3.FORWARD.rotated(Vector3.UP, view_node.rotation.y) if view_node != null else Vector3.FORWARD # carried in front of the player (the way the camera looks)
 	for i in _held_props.size():
-		(_held_props[i] as ResourceProp).global_position = global_position + ResourceProp.carry_offset(i)
-	var aimed := _aimed_pile_log()
-	_set_pile_outline(aimed)
+		(_held_props[i] as ResourceProp).carry_to(global_position + ResourceProp.carry_offset(i, carry_forward))
+	_eat_held_fruit()
 	if Input.is_action_just_pressed("drop") and not _held_props.is_empty():
 		var top := _held_props.pop_back() as ResourceProp
 		top.release(Vector3(velocity.x, 0.0, velocity.z))
-	if aimed != null:
-		_update_log_theft(aimed) # looking at a log on the woodpile: E is for taking it
-		return
-	_take_hold_start = -1
-	var full := _held_props.size() >= ResourceProp.MAX_CARRY
+	var full := _held_props.size() >= ResourceProp.MAX_CARRY or _holding_log() # a log fills your arms
 	var nearest: ResourceProp = null if full else _nearest_grabbable(false)
-	var drop_hint := "   [Q] Drop" if not _held_props.is_empty() else ""
+	var bush: Gatherable = null if full else builder.nearest_pickable_bush(global_position, BUSH_PICK_REACH)
+	var drop_hint := ("   [Q] Drop" + ("   [F] Eat" if _holding_food() else "")) if not _held_props.is_empty() else ""
 	if nearest != null:
 		_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
 		if Input.is_action_just_pressed("grab"):
 			nearest.grab()
 			_held_props.append(nearest)
+	elif bush != null:
+		_set_grab_hint("[E] Pick fruit (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
+		if Input.is_action_just_pressed("grab"):
+			var fruit: ResourceProp = builder.pick_bush_fruit(bush)
+			if fruit != null:
+				fruit.grab()
+				_held_props.append(fruit)
 	elif not _held_props.is_empty():
 		if full:
 			_set_grab_hint("Hands full (%d/%d) - [Q] Drop" % [_held_props.size(), ResourceProp.MAX_CARRY])
@@ -300,64 +274,38 @@ func _update_grab() -> void:
 	else:
 		_set_grab_hint("")
 
-## The log on the woodpile the player is looking at (the same mouse / crosshair ray the citizen selector uses), if it is
-## within work reach. Only offline / on the host: the server owns the pile.
-func _aimed_pile_log() -> ResourceProp:
-	if Globals.online_client:
-		return null
-	var camera := get_viewport().get_camera_3d()
-	if camera == null:
-		return null
-	var screen_pos := Globals.aim_position()
-	var from := camera.project_ray_origin(screen_pos)
-	var query := PhysicsRayQueryParameters3D.create(from, from + camera.project_ray_normal(screen_pos) * 60.0)
-	query.collide_with_bodies = true
-	query.exclude = [get_rid()]
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	var prop := hit.get("collider") as ResourceProp
-	if prop == null or not prop.in_pile or prop.collected:
-		return null
-	if Builder.flat_distance(prop.global_position, global_position) > Builder.PLAYER_WORK_REACH:
-		return null
-	return prop
+# Holding fruit: hold F to eat it right out of your hands, one bite per EAT_BITE_INTERVAL (offline / host only, like eating at the store)
+const EAT_HELD_KEY := KEY_F
+var _eat_held_timer := 0.0
 
-## Hold E on an aimed log to take it off the pile: it pops out loose towards the player.
-func _update_log_theft(prop: ResourceProp) -> void:
-	if not Input.is_action_pressed("grab"):
-		_take_hold_start = -1
-		_set_grab_hint("[Hold E] Take log")
+func _eat_held_fruit() -> void:
+	if not Input.is_key_pressed(EAT_HELD_KEY) or Globals.online_client or dev_mode or energy >= 100.0:
+		_eat_held_timer = 0.0
 		return
-	var now := Time.get_ticks_msec()
-	if _take_hold_start < 0:
-		_take_hold_start = now
-	var t := float(now - _take_hold_start) / (TAKE_LOG_HOLD * 1000.0)
-	if t >= 1.0:
-		_take_hold_start = -1
-		builder.take_log_from_pile(prop, global_position)
-		_set_pile_outline(null)
-	else:
-		_set_grab_hint("Taking log... %d%%" % int(t * 100.0))
+	_eat_held_timer -= get_physics_process_delta_time()
+	if _eat_held_timer > 0.0:
+		return
+	for i in range(_held_props.size() - 1, -1, -1):
+		var held_prop := _held_props[i] as ResourceProp
+		if is_instance_valid(held_prop) and String(held_prop.get_meta("resource_type", "")) == "food":
+			_eat_held_timer = EAT_BITE_INTERVAL
+			_held_props.remove_at(i)
+			energy += builder.eat_held_prop(held_prop)
+			return
 
-func _set_pile_outline(target: ResourceProp) -> void:
-	if target == _pile_hover:
-		return
-	for mesh in _pile_hover_meshes:
-		if is_instance_valid(mesh):
-			mesh.material_overlay = null
-	_pile_hover_meshes.clear()
-	_pile_hover = target
-	if _outline_material == null:
-		var selector := get_tree().root.find_child("CitizenSelector", true, false) # same yellow overlay it uses
-		if selector != null:
-			_outline_material = selector.get("outline_material")
-	if target == null or _outline_material == null:
-		return
-	for node in target.find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		mesh.material_overlay = _outline_material
-		_pile_hover_meshes.append(mesh)
+func _holding_food() -> bool:
+	for held_prop in _held_props:
+		if is_instance_valid(held_prop) and String(held_prop.get_meta("resource_type", "")) == "food":
+			return true
+	return false
 
-## The closest small prop within GRAB_REACH that can be picked up (logs are big enough to push, so they are skipped).
+func _holding_log() -> bool:
+	for held_prop in _held_props:
+		if is_instance_valid(held_prop) and builder.is_stacked_type(String(held_prop.get_meta("resource_type", ""))):
+			return true
+	return false
+
+## The closest prop within GRAB_REACH that can be picked up: small ones (fruit) and logs lying on the stockpile (loose logs are big enough to push, so they are skipped).
 ## On a client every prop is a puppet of the server's, which has the final say (can_be_grabbed) anyway.
 func _nearest_grabbable(is_client: bool) -> ResourceProp:
 	var nearest: ResourceProp = null
@@ -371,8 +319,10 @@ func _nearest_grabbable(is_client: bool) -> ResourceProp:
 		if is_client and _held_prop_names.has(String(prop.name)):
 			continue # already on our stack
 		if builder.is_stacked_type(String(prop.get_meta("resource_type", ""))):
-			continue
-		var d := global_position.distance_squared_to(prop.global_position)
+			# Logs are shoved, not carried -- except the ones lying on the stockpile, which can be taken (stolen), one at a time
+			if not prop.in_pile or not prop.has_arrived() or not (_held_prop_names if is_client else _held_props).is_empty():
+				continue
+		var d := global_position.distance_to(prop.global_position)
 		if d < best:
 			best = d
 			nearest = prop
@@ -431,20 +381,31 @@ func _unhandled_input(event: InputEvent) -> void:
 			_stop_work()
 
 func _try_start_work(screen_pos: Vector2) -> void:
-	if builder == null or builder.interact_mode:
-		return
+	if builder == null or (builder.interact_mode and not builder.delete_mode):
+		return # building mode: left click places things
 	# A citizen is selected -- this click is for assigning them (see CitizenSelector)
 	var selector = get_tree().get_first_node_in_group("citizen_selector")
 	if selector and selector.selected_citizen != null:
 		return
 	
+	# A construction site is picked by its on-screen region (the crosshair / cursor over the site, see
+	# Builder.pick_site_in_screen) rather than by where a physics ray lands on the ground.
+	if not builder.delete_mode:
+		var site_id: String = builder.pick_site_in_screen(screen_pos, global_position, Builder.PLAYER_WORK_REACH)
+		if site_id != NO_ID:
+			build_target_id = site_id
+			_build_assigned = true
+			builder.assign_builder_to_site(Builder.PLAYER_BUILDER_ID, site_id)
+			get_viewport().set_input_as_handled()
+			return
+	
 	var hit := _raycast_target_in_reach(screen_pos)
 	if hit.id == NO_ID:
 		return
 	
-	# Holding Del while clicking a built structure (or a site) = take it apart. It takes labour: see
-	# _update_demolishing and Builder.add_demolish_progress. Del held on anything else does nothing.
-	if Input.is_action_pressed("demolish"):
+	# In delete mode (Tab for interact mode, then Backspace) clicking a built structure (or a site) takes it apart. It takes
+	# labour: see _update_demolishing and Builder.add_demolish_progress. Clicking anything else in delete mode does nothing.
+	if builder.delete_mode:
 		if builder.can_demolish(hit.id):
 			demolish_target_id = hit.id
 			get_viewport().set_input_as_handled()
@@ -478,6 +439,7 @@ func _stop_building_task() -> void:
 	if build_target_id != NO_ID and builder != null:
 		builder.release_builder(Builder.PLAYER_BUILDER_ID)
 	build_target_id = NO_ID
+	_build_assigned = false
 
 # Called every physics frame while the mouse button is held.
 func _update_gathering(delta: float) -> void:
@@ -494,7 +456,7 @@ func _update_gathering(delta: float) -> void:
 		return
 	
 	# Wandered out of reach while holding -- stop rather than gathering at a distance.
-	if _flat_distance_to(builder.get_structure_position(gather_target_id)) > builder.get_gather_reach(gather_target_id):
+	if _distance_to(builder.get_structure_position(gather_target_id)) > builder.get_gather_reach(gather_target_id):
 		_stop_gathering()
 		return
 	
@@ -511,8 +473,8 @@ func _update_gathering(delta: float) -> void:
 func _update_demolishing(delta: float) -> void:
 	if demolish_target_id == NO_ID:
 		return
-	if builder == null or not builder.can_demolish(demolish_target_id) or not Input.is_action_pressed("demolish"):
-		demolish_target_id = NO_ID # gone already, or Del was let go
+	if builder == null or not builder.can_demolish(demolish_target_id) or not builder.delete_mode:
+		demolish_target_id = NO_ID # gone already, or delete mode was left
 		return
 	if _flat_distance_to(builder.get_demolish_position(demolish_target_id)) > Builder.PLAYER_WORK_REACH:
 		demolish_target_id = NO_ID # wandered off
@@ -536,10 +498,25 @@ func _update_building_task(delta: float) -> void:
 		_stop_building_task()
 		return
 	
+	# Progress only counts while the crosshair (or the cursor, when unlocked) is over the site's on-screen region. Looking away
+	# pauses the work without ending the click-and-hold: look back at the site and it carries on.
+	var over_site: bool = builder.screen_point_over_site(build_target_id, Globals.aim_position())
+	if over_site != _build_assigned:
+		_build_assigned = over_site
+		if over_site:
+			builder.assign_builder_to_site(Builder.PLAYER_BUILDER_ID, build_target_id)
+		else:
+			builder.release_builder(Builder.PLAYER_BUILDER_ID)
+	if not over_site:
+		return # no labour, so no energy cost either
 	energy -= builder.structures[site.structure_index].build_energy_required * delta
 
 func _flat_distance_to(pos: Vector3) -> float:
 	return global_position.distance_to(Vector3(pos.x, global_position.y, pos.z))
+
+# True 3D distance (height counts): a gatherable's reach is a sphere around it, same as its interact_hint.
+func _distance_to(pos: Vector3) -> float:
+	return global_position.distance_to(pos)
 
 # Picks the construction site / placed structure under the cursor (a real physics pick, see
 # Builder.pick_world_position) and checks it is within the player's reach.
@@ -554,7 +531,7 @@ func _raycast_target_in_reach(screen_pos: Vector2) -> Dictionary:
 	# is a miss rather than letting the click fall through to something behind it.
 	var object_id: String = builder.pick_object_at(screen_pos)
 	if object_id != NO_ID:
-		if _flat_distance_to(builder.get_structure_position(object_id)) <= builder.get_gather_reach(object_id):
+		if _distance_to(builder.get_structure_position(object_id)) <= builder.get_gather_reach(object_id):
 			return {"id": object_id, "is_site": false}
 		return none
 	
@@ -563,8 +540,7 @@ func _raycast_target_in_reach(screen_pos: Vector2) -> Dictionary:
 		return none
 	var world_position: Vector3 = picked
 	
-	# The ray can end on something far away (e.g. the world boundary 500 m out): nothing there is in
-	# reach, so don't even look for targets near that point.
+	# The ray can end on something far away, prevent out of range outputs
 	if _flat_distance_to(world_position) > Builder.PLAYER_WORK_REACH + Builder.PICK_RADIUS:
 		return none
 	

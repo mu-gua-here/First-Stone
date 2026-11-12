@@ -15,6 +15,8 @@ class_name PlayerHUD
 @export var health_label: Label
 @export var energy_bar: ProgressBar
 @export var energy_label: Label
+@export var clock_label: Label ## top-left in-game clock (12h). Show/hide it with the toggle_clock action (G)
+@export var day_night: DayNightCycle ## where the in-game time of day is read from
 
 @export_group("Low-health warning (red)")
 ## Below this much health (in HP) the red edge stays on screen permanently.
@@ -63,6 +65,7 @@ var _burst_damage := 0.0 # damage summed over hits while a flash is still showin
 var _low_intensity := 0.0 # smoothed persistent low-health vignette
 var _intensity := 0.0
 var _energy_intensity := 0.0
+var _last_clock_minute := -1
 
 
 func _ready() -> void:
@@ -74,6 +77,7 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_update_clock()
 	if _player == null:
 		_try_bind_player() # the Player registers itself with Globals in its own _ready()
 
@@ -104,6 +108,28 @@ func _process(delta: float) -> void:
 	energy_vignette.visible = _energy_intensity > 0.004
 	if energy_vignette.visible:
 		_energy_vignette_mat.set_shader_parameter("intensity", _energy_intensity)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if clock_label and event.is_action_pressed("toggle_clock"):
+		clock_label.visible = not clock_label.visible
+		_last_clock_minute = -1 # refresh the text right away when it comes back
+
+
+# In-game time as 12h text. DayNightCycle.time_of_day is 0..1 with 0 = midnight, so 0.25 = 6:00 AM, 0.5 = 12:00 PM.
+# Only touches the label when the displayed minute changes.
+func _update_clock() -> void:
+	if clock_label == null or day_night == null or not clock_label.visible:
+		return
+	var minute_of_day := int(day_night.time_of_day * 1440.0) % 1440
+	if minute_of_day == _last_clock_minute:
+		return
+	_last_clock_minute = minute_of_day
+	var hour_24 := floori(minute_of_day / 60.0)
+	var hour_12 := hour_24 % 12
+	if hour_12 == 0:
+		hour_12 = 12
+	clock_label.text = "%d:%02d %s" % [hour_12, minute_of_day % 60, "AM" if hour_24 < 12 else "PM"]
 
 
 # 0 at/above low_health_threshold; below it, always at least low_health_floor, rising linearly to 1 at 0 HP.

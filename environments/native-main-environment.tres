@@ -1,10 +1,11 @@
 [gd_resource type="Environment" format=3 uid="uid://jbptgqvstei3"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_fuf3a"]
-sky_top_color = Color(0.25214654, 0.45945334, 0.68831205, 1)
+sky_top_color = Color(0.4344593, 0.6365811, 0.8679664, 1)
 sky_horizon_color = Color(0.9999996, 0.9000229, 0.74796754, 1)
 ground_bottom_color = Color(0.03000879, 0.16201681, 0.27112532, 1)
-ground_curve = 0.2161886
+ground_horizon_color = Color(1.4439226e-07, 0.10791425, 0.19699064, 1)
+ground_curve = 0.1
 
 [sub_resource type="Sky" id="Sky_kmb1v"]
 sky_material = SubResource("ProceduralSkyMaterial_fuf3a")
@@ -12,12 +13,9 @@ radiance_size = 0
 
 [resource]
 background_mode = 2
-background_color = Color(1, 1, 1, 1)
 sky = SubResource("Sky_kmb1v")
-ambient_light_source = 2
+ambient_light_source = 3
 ambient_light_color = Color(0.92913723, 0.91451216, 0.90777975, 1)
-ambient_light_sky_contribution = 0.0
-reflected_light_source = 2
 tonemap_mode = 2
 tonemap_white = 2.0
 tonemap_agx_white = 2.0
@@ -33,10 +31,6 @@ glow_levels/3 = 0.6
 glow_intensity = 2.0
 fog_enabled = true
 fog_mode = 1
-fog_light_color = Color(0.7607843, 0.78039217, 0.78431374, 1)
-fog_density = 0.5
+fog_density = 0.8
 fog_sky_affect = 0.0
-fog_depth_curve = 0.25
-fog_depth_begin = 20.0
-fog_depth_end = 200.0
 adjustment_brightness = 0.0

@@ -1,7 +1,7 @@
 extends Carrier
 
 # Movement settings
-@export var BASE_SPEED = 6.0
+@export var BASE_SPEED = 4.0
 @export var BOUNCE_HEIGHT := 0.0
 var actual_speed: float
 var wander_timer: float = 0.0
@@ -15,17 +15,6 @@ const CHASE_REPATH_INTERVAL := 0.25
 # Distance a citizen needs to be from a gatherable/build cell to start contributing
 const WORK_REACH := 1.5
 
-# Energy per second spent swimming (the player's move_energy)
-const SWIM_ENERGY := 0.1
-
-# Health lost per second while energy is below 30 (the player's hunger_dmg)
-@export var hunger_dmg := 0.2
-
-## Below this much health & energy the player starts to slow down (and jump / swim weaker), reaching a standstill at 0.
-## Stacks multiplicatively with the low-energy slowdown, so being low on both is much worse than either.
-@export var slow_below_health := 50.0
-@export var slow_below_energy := 50.0
-
 # Attack settings (only relevant while is_chasing_player is true)
 @export var attack_damage: float = 10.0
 @export var attack_cooldown_time: float = 1.0  # seconds between hits on the same target
@@ -38,6 +27,8 @@ var _wanted_velocity := Vector3.ZERO
 @onready var nav_agent = $NavigationAgent3D
 @onready var mesh_instance: MeshInstance3D = $MeshInstance3D
 @onready var nameplate: Nameplate = $Nameplate # name, health and energy floating over the head (same scene the other players use)
+
+@export var gather_debug := false
 
 @export var data: CitizenData
 
@@ -86,6 +77,7 @@ var build_target_id: String = NO_ID
 # after a gather completes. The citizen first walks round to the far side of the prop, then
 # walks at the stockpile -- shoving the prop ahead of them.
 var is_pushing: bool = false
+var _carry_forward := Vector3.FORWARD # the way this citizen last walked: carried fruit is held in front of them
 var push_target: RigidBody3D = null
 var push_repath_timer: float = 0.0
 const PUSH_REPATH_INTERVAL := 0.3
@@ -107,6 +99,10 @@ var _ignored_props: Dictionary = {} # prop instance id -> time (s) until which t
 # ResourceProp.MAX_CARRY, stacked overhead, then walks the whole armful onto the stockpile and drops them there.
 const FRUIT_GRAB_REACH := 1.5 # how close to a fruit before it is picked up
 const FRUIT_LEG_TIMEOUT := 20.0 # seconds to reach one fruit before giving up on it (delivery gets double)
+const BUSH_SEEK_RADIUS := 25.0 # how far a fruit run looks for a bush once no loose fruit is left
+const BUSH_PICK_REACH := 2.4 # how close (flat, to the bush's centre) to pick its fruit
+const BUSH_PICK_TIME := 1.2 # seconds to pick one fruit
+var _bush_pick_timer := 0.0
 var _fruit_run := false # the current task is carrying fruit rather than pushing a log
 var _fruit_delivering := false # hands full / nothing left to pick up: heading for the stockpile
 var _fruit_leg_time := 0.0
@@ -177,11 +173,9 @@ func _ready():
 	_request_initial_wander()
 
 func _request_initial_wander() -> void:
-	# A single await get_tree().physics_frame isn't reliably enough -- if the
-	# NavigationRegion3D is still registering its polygons with the server around the same
-	# time citizens spawn (both happening during the scene's initial _ready() pass), the
-	# map's first sync can land on a later frame. map_get_iteration_id() is 0 until the map
-	# has synced at least once, so poll it instead of guessing a frame count.
+	# If the NavigationRegion3D is still registering its polygons with the server around the same
+	# time citizens spawn, the map's first sync can land on a later frame.
+	# map_get_iteration_id() is 0 until the map has synced at least once
 	var map_rid = nav_agent.get_navigation_map()
 	while NavigationServer3D.map_get_iteration_id(map_rid) == 0:
 		await get_tree().physics_frame
@@ -205,10 +199,8 @@ func _physics_process(delta):
 	_apply_gravity(delta) # see carrier.gd -- gradual sink in water, normal gravity on land
 	_swim_toward_surface(delta) # tread water like the player instead of sinking to the bottom
 	var in_fluid := is_in_fluid()
-	if in_fluid:
-		data.energy -= SWIM_ENERGY * delta # swimming is tiring, same as for the player
 		
-	var energy_mult := clampf(smoothstep(0.0, 1.0, data.energy * 0.02), 0.2, 1.0)
+	var energy_mult := clampf(smoothstep(0.0, 1.0, energy * 0.02), 0.2, 1.0)
 	var health_mult := clampf(smoothstep(0.0, 1.0, health / maxf(slow_below_health, 0.001)), 0.2, 1.0)
 	var vitality_mult := energy_mult * health_mult
 	
@@ -243,7 +235,7 @@ func _physics_process(delta):
 	var housing_target = 100.0 if _has_housing else 0.0
 	data.housing_satisfaction = move_toward(data.housing_satisfaction, housing_target, delta * 20.0)
 	
-	data.happiness = clamp(50 - (100 - data.energy) * 0.005 + (data.job_satisfaction * 0.01 if data.job != "" else -data.job_satisfaction * 0.01) + (data.housing_satisfaction - 50.0) * 0.1, 0, 100)
+	data.happiness = clamp(50 - (100 - energy) * 0.005 + (data.job_satisfaction * 0.01 if data.job != "" else -data.job_satisfaction * 0.01) + (data.housing_satisfaction - 50.0) * 0.1, 0, 100)
 	update_happiness_color()
 	
 	actual_speed = BASE_SPEED + (100 - data.happiness) * 0.01
@@ -271,7 +263,7 @@ func _physics_process(delta):
 	if not is_gathering and not is_building and not is_pushing and not is_eating:
 		wander_timer -= delta
 		if is_on_floor() and wander_timer > 0:
-			if data.energy > 0.0:
+			if energy > 0.0:
 				velocity.y = BOUNCE_HEIGHT
 		else:
 			wander_timer = randf_range(0, 2) * (100 - data.happiness)
@@ -279,10 +271,10 @@ func _physics_process(delta):
 	else:
 		# Working: the walk to the tree / site / prop used to have NO hop at all (only wandering did), which
 		# looked like the citizen had frozen. Hop while travelling, stand still once at the work spot.
-		if is_on_floor() and data.energy > 0.0 and not nav_agent.is_navigation_finished() and not _is_at_gather_target():
+		if is_on_floor() and energy > 0.0 and not nav_agent.is_navigation_finished() and not _is_at_gather_target():
 			velocity.y = BOUNCE_HEIGHT
 	
-	if not nav_agent.is_navigation_finished() and data.energy > 0.0:
+	if not nav_agent.is_navigation_finished() and energy > 0.0:
 		# Guards against the same "Invalid navigation index" error for targets that aren't
 		# wander points (chase, gather, push) -- those come from real object positions, so
 		# _wander_target()'s snapping doesn't cover them. If the river (or anything else)
@@ -306,6 +298,9 @@ func _physics_process(delta):
 			var next = nav_agent.get_next_path_position()
 			var direction = (next - global_position).normalized()
 			var desired_velocity := Vector3(direction.x * actual_speed, 0.0, direction.z * actual_speed)
+			
+			if in_fluid: energy -= swim_energy * delta
+			
 			if nav_agent.avoidance_enabled:
 				nav_agent.set_velocity(desired_velocity)  # triggers velocity_computed -> _wanted_velocity
 			else:
@@ -315,21 +310,32 @@ func _physics_process(delta):
 	
 	# Slow citizen if citizen need food
 	var wanted := _wanted_velocity
-	if data.energy < slow_below_energy:
+	if energy < slow_below_energy:
 		wanted *= vitality_mult
 	
-	data.energy -= (data.metabolism + data.metabolism * Vector3(velocity.x, 0, velocity.z).length()) * delta
-	data.energy = clamp(data.energy, 0, 100)
+	steer_horizontal(wanted, delta)
 	
-	# Starving eats away at health, same rule as the player (see player.gd)
-	if data.energy < 30.0:
+	if wanted.length() > 0.0:
+		# Subtract energy when movement is done
+		if in_fluid: energy -= move_energy * delta
+		else: energy -= swim_energy * delta
+	
+	energy -= metabolism * delta
+	
+	# Heal player if not at max health
+	if health < 100.0 and energy > 30.0:
+		health += heal_rate * delta
+		energy -= heal_energy * delta
+	
+	# Starving eats away at health, same rule as the player
+	if energy < 30.0:
 		health -= hunger_dmg * delta
 	
-	steer_horizontal(wanted, delta)
 	_before_slide()
 	var fall_speed := -velocity.y # captured before move_and_slide() zeroes it on landing
 	move_and_slide()
 	_apply_fall_damage(fall_speed, in_fluid) # see carrier.gd -- same rule as the player
+	
 	_push_colliding_bodies() # shared with player.gd, see carrier.gd -- must run AFTER move_and_slide() to read this frame's collisions
 	
 	# Real physical collision check — did we actually touch the player this frame?
@@ -411,21 +417,21 @@ func _update_gathering(delta: float) -> void:
 	var target_pos = builder.get_structure_position(gather_target_id)
 	var target_world_pos = Vector3(target_pos.x, global_position.y, target_pos.z)
 	var close_enough = global_position.distance_to(target_world_pos) <= builder.get_gather_reach(gather_target_id)
-	if OS.is_debug_build() and not close_enough:
+	if gather_debug and not close_enough:
 		_debug_gather_timer -= delta
 		if _debug_gather_timer <= 0.0:
 			_debug_gather_timer = 1.0
 			print("[gather-debug] %s pos=%s nav_target=%s final=%s finished=%s reachable=%s flat_dist=%.2f next=%s wanted=%s vel=%s energy=%.1f" % [
 				name, global_position, nav_agent.target_position, nav_agent.get_final_position(), nav_agent.is_navigation_finished(),
 				nav_agent.is_target_reachable(), Vector2(global_position.x - target_pos.x, global_position.z - target_pos.z).length(),
-				nav_agent.get_next_path_position(), _wanted_velocity, velocity, data.energy])
+				nav_agent.get_next_path_position(), _wanted_velocity, velocity, energy])
 	if not nav_agent.is_navigation_finished() and not close_enough:
 		return
 	
 	# Arrived -- contribute labor toward the shared, persisted chop progress.
 	var gather_time = builder.structures[structure_index].gather_time
 	var energy_required = builder.structures[structure_index].energy_required
-	data.energy = clamp(data.energy - energy_required * delta, 0.0, 100.0)
+	energy = clamp(energy - energy_required * delta, 0.0, 100.0)
 	# add_chop_progress returns a Dictionary (not a bool) -- it's ALWAYS
 	# truthy since it always has keys, even mid-chop. Must check the
 	# "completed" key explicitly, not the dict itself.
@@ -434,7 +440,7 @@ func _update_gathering(delta: float) -> void:
 		is_gathering = false
 		var energy_bonus: float = result.get("energy_bonus", 0.0)
 		if energy_bonus > 0.0:
-			data.energy = clamp(data.energy + energy_bonus, 0.0, 100.0)
+			energy = clamp(energy + energy_bonus, 0.0, 100.0)
 		_chain_origin = target_pos # the logs of this tree are what we push next
 		_after_push()
 
@@ -476,6 +482,10 @@ func _nearest_pushable_prop(only_small: bool) -> RigidBody3D:
 			continue # already piled at the stockpile -- nothing left to push
 		if prop.held:
 			continue # somebody is carrying it
+		if not _handles_resource(String(prop.get_meta("resource_type", ""))):
+			continue # not what this citizen's job is about
+		if not only_small and builder.is_in_pile_block(String(prop.get_meta("resource_type", "")), prop.global_position):
+			continue # already over its stockpile: the pile tidies it, nobody needs to push it
 		if only_small and builder.is_stacked_type(String(prop.get_meta("resource_type", ""))):
 			continue
 		if _ignored_props.get(prop.get_instance_id(), 0.0) > now:
@@ -508,6 +518,42 @@ func _begin_pushing(prop: RigidBody3D) -> void:
 	else:
 		set_new_destination(_push_destination())
 
+# Whether this citizen's job covers a resource: woodcutters and haulers deal with logs only, foragers with fruit only;
+# everyone else (no workplace job, builders) as before.
+func _handles_resource(resource_type: String) -> bool:
+	var is_log: bool = builder.is_stacked_type(resource_type)
+	match data.job_task:
+		Structure.JobTask.GATHER, Structure.JobTask.HAUL:
+			return is_log
+		Structure.JobTask.FORAGE:
+			return not is_log
+	return true
+
+# Fruit run, nothing loose left to grab: walk to the nearest bush that still has fruit and pick it one by one until the
+# armful is full. Returns true while it is busy with a bush.
+func _pick_from_bush(delta: float) -> bool:
+	if not _handles_resource("food") or _fruit_leg_time >= FRUIT_LEG_TIMEOUT:
+		return false
+	var bush: Gatherable = builder.nearest_pickable_bush(global_position, BUSH_SEEK_RADIUS)
+	if bush == null:
+		_bush_pick_timer = 0.0
+		return false
+	if Builder.flat_distance(global_position, bush.global_position) > BUSH_PICK_REACH:
+		_bush_pick_timer = 0.0
+		if push_repath_timer <= 0.0:
+			push_repath_timer = PUSH_REPATH_INTERVAL
+			set_new_destination(NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), bush.global_position))
+		return true
+	_bush_pick_timer += delta
+	if _bush_pick_timer >= BUSH_PICK_TIME:
+		_bush_pick_timer = 0.0
+		var fruit: ResourceProp = builder.pick_bush_fruit(bush)
+		if fruit != null:
+			fruit.grab()
+			_carried.append(fruit)
+			_fruit_leg_time = 0.0
+	return true
+
 # One tick of a fruit run: walk to the nearest loose fruit and grab it, repeat until the armful is 10 (or none are
 # left), then walk onto the stockpile and let go -- the fruits settle there and are collected as usual.
 func _update_fruit_run(delta: float) -> void:
@@ -525,6 +571,8 @@ func _update_fruit_run(delta: float) -> void:
 				push_target = next
 				_fruit_leg_time = 0.0
 				push_repath_timer = 0.0
+			elif _pick_from_bush(delta):
+				return # busy picking from a bush
 		if push_target != null:
 			if push_repath_timer <= 0.0:
 				push_repath_timer = PUSH_REPATH_INTERVAL
@@ -572,8 +620,11 @@ func _hold_carried() -> void:
 	if not is_pushing or not _fruit_run:
 		_drop_carried()
 		return
+	var flat_velocity := Vector3(velocity.x, 0.0, velocity.z)
+	if flat_velocity.length() > 0.1:
+		_carry_forward = flat_velocity.normalized() # carried in front of them, the way they are walking
 	for i in _carried.size():
-		(_carried[i] as ResourceProp).global_position = global_position + ResourceProp.carry_offset(i)
+		(_carried[i] as ResourceProp).carry_to(global_position + ResourceProp.carry_offset(i, _carry_forward))
 
 func _drop_carried() -> void:
 	for node in _carried:
@@ -598,6 +649,13 @@ func _update_pushing(delta: float) -> void:
 		is_pushing = false
 		push_target = null
 		_after_push() # on to the next log
+		return
+	# The log is over the stockpile block: our job is done. Stop here instead of walking on through the pile --
+	# the pile itself tidies the log onto its slot (see ResourceProp / Builder.claim_stack_slot).
+	if builder.is_in_stockpile(push_target.global_position):
+		is_pushing = false
+		push_target = null
+		_after_push()
 		return
 	push_repath_timer -= delta
 	if push_repath_timer <= 0.0:
@@ -692,8 +750,8 @@ func _update_eating(delta: float) -> void:
 	if _eat_bite_timer > 0.0:
 		return
 	_eat_bite_timer = EAT_BITE_INTERVAL
-	data.energy = clampf(data.energy + builder.take_food(), 0.0, 100.0)
-	if data.energy >= builder.eat_until:
+	energy = clampf(energy + builder.take_food(), 0.0, 100.0)
+	if energy >= builder.eat_until:
 		_stop_eating(0.0)
 
 ## Action EAT: drop what they are doing, walk to the stockpile and eat until full, then go back to it. Whether they
@@ -707,7 +765,7 @@ func start_eating() -> bool:
 	is_eating = true
 	_eat_elapsed = 0.0
 	_eat_bite_timer = 0.0
-	set_new_destination(NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), builder.stockpile_position))
+	set_new_destination(NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), builder.food_stockpile_position))
 	return true
 
 func _stop_eating(retry_delay: float) -> void:
@@ -753,7 +811,7 @@ func _update_building(delta: float) -> void:
 	# Building costs energy while actively assigned to a site -- same
 	# per-second model as gathering (see Structure.build_energy_required).
 	var structure: Structure = builder.structures[site.structure_index]
-	data.energy = clamp(data.energy - structure.build_energy_required * delta, 0.0, 100.0)
+	energy = clamp(energy - structure.build_energy_required * delta, 0.0, 100.0)
 
 func set_new_destination(target):
 	nav_agent.target_position = target
@@ -821,7 +879,7 @@ func set_job(title: String, task: int, workplace_id: String) -> void:
 	data.job = title
 	data.job_task = task
 	data.workplace_id = workplace_id
-	gather_filter = "wood" if task == Structure.JobTask.GATHER else ""
+	gather_filter = "wood" if task == Structure.JobTask.GATHER else ("food" if task == Structure.JobTask.FORAGE else "")
 	is_hauling = task == Structure.JobTask.HAUL
 	_haul_timer = 0.0
 	_job_timer = 0.0 # get to work straight away
@@ -876,7 +934,7 @@ func _update_nameplate() -> void:
 		_shown_name = data.citizen_name
 		nameplate.set_player_name(_shown_name if _shown_name != "" else "Unnamed")
 	var health_pct := roundi(health / maxf(max_health, 1.0) * 100.0)
-	var energy_pct := roundi(data.energy)
+	var energy_pct := roundi(energy)
 	if health_pct != _shown_health or energy_pct != _shown_energy:
 		_shown_health = health_pct
 		_shown_energy = energy_pct
@@ -920,7 +978,7 @@ func _publish_net_state() -> void:
 	net_age = data.age
 	net_job = data.job
 	net_happiness = snappedf(data.happiness, 0.1)
-	net_energy = snappedf(data.energy, 0.1)
+	net_energy = snappedf(energy, 0.1)
 	net_health = snappedf(health, 0.1)
 	net_hostile = is_chasing_player
 
@@ -938,7 +996,7 @@ func _puppet_process(delta: float) -> void:
 	data.age = net_age
 	data.job = net_job
 	data.happiness = net_happiness
-	data.energy = net_energy
+	energy = net_energy
 	health = maxf(net_health, 0.01) # not 0: that would run the death logic here, the server decides who dies
 	is_chasing_player = net_hostile
 	update_happiness_color()

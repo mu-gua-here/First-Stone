@@ -156,10 +156,10 @@ script = ExtResource("1_1mjqo")
 transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0)
 
 [node name="BowPort" type="Marker3D" parent="Floaters" unique_id=2015745117]
-transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, -0.6, 0.10038698, 1.1)
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, -0.6, -0.1, 1.1)
 
 [node name="BowStarboard" type="Marker3D" parent="Floaters" unique_id=718512732]
-transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.6, 0.10038698, 1.1)
+transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, 0.6, -0.1, 1.1)
 
 [node name="SternPort" type="Marker3D" parent="Floaters" unique_id=1428544451]
 transform = Transform3D(2, 0, 0, 0, 2, 0, 0, 0, 2, -0.6, -0.1, -1.3)

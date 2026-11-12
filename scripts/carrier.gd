@@ -21,9 +21,16 @@ class_name Carrier
 ## Health, falling and dying are shared by everyone who extends Carrier (Player and Citizen), so they
 ## obey the same rules. What differs is only what dying DOES: see _on_death().
 signal health_changed(current: float, max: float)
+signal energy_changed(current: float, max: float)
 signal died
 
+@export_category("Physics")
+@export var SPEED := 4.0
+@export var RUN_SPEED := 6.0
+@export var SWIM_SPEED := 0.5
+
 @export_category("Mechanics")
+@export var hunger_dmg := 0.01
 ## Landing (or splashing down) faster than this (m/s) hurts. Damage = excess speed, halved in water.
 @export var fall_dmg_threshold := 14.0
 ## Falling below this world height kills the carrier (it fell out of the world).
@@ -31,6 +38,10 @@ signal died
 
 @export_category("Physiology")
 @export var max_health: float = 100.0
+@export var max_energy: float = 100.0
+@export var heal_rate := 0.1
+@export var heal_energy := 0.05
+
 ## Assign to health directly -- the setter clamps, emits health_changed and handles death.
 @export_range(0.0, 100.0) var health: float = 100.0:
 	set(value):
@@ -38,6 +49,22 @@ signal died
 		health_changed.emit(health, max_health)
 		if health <= 0.0:
 			_die()
+## Assign to energy directly -- the setter clamps and emits energy_changed.
+@export_range(0.0, 100.0) var energy: float = 100.0:
+	set(value):
+		var clamped := clampf(value, 0.0, 100.0)
+		if clamped == energy:
+			return
+		energy = clamped
+		energy_changed.emit(energy, 100.0)
+
+@export var move_energy := 0.5
+@export var swim_energy := 0.1
+@export var metabolism: float = 0.01
+
+## Below this much health & energy the player starts to slow down (and jump / swim weaker)
+@export var slow_below_health := 50.0
+@export var slow_below_energy := 50.0
 
 ## True from the moment health hits 0 until (for the player only) the respawn.
 var is_dead := false
@@ -132,7 +159,15 @@ func _swim_toward_surface(delta: float) -> void:
 	velocity.y += swim_accel * clampf(depth, 0.0, 1.0) * delta
 
 # One-time impact: a rigid body (or another carrier) hit us with this velocity change.
+# A carrier squeezed between bodies loses and regains contact every few frames, and each regain used to count as a fresh hit that
+# also pops them upwards: the velocities piled up and the next landing hurt. So impacts are rate-limited.
+const PUSH_COOLDOWN_MS := 250
+var _last_push_ms := -PUSH_COOLDOWN_MS
 func receive_push(dv: Vector3) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _last_push_ms < PUSH_COOLDOWN_MS:
+		return
+	_last_push_ms = now
 	velocity += dv.limit_length(MAX_IMPACT_SPEED)
 
 # Moves horizontal velocity toward `wanted` (x/z only). Accelerates toward it with input, and

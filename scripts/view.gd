@@ -90,6 +90,8 @@ var _tp_pos_valid := false
 @export var wheel_zoom_speed := 0.5  # metres per unit of wheel 'factor' -- tune on web
 @export var wheel_rotate_sensitivity := 0.7  # degrees per unit of wheel 'factor' (sideways scroll) -- tune on web
 @export var pinch_zoom_speed := 0.5
+## Web, mouse/trackpad: the first click locks the pointer so moving the mouse alone turns the camera (like most web games)
+@export var web_auto_pointer_lock := true
 
 # Shift lock (toggle with the shift_lock action, L by default): the mouse is captured and simply turns the camera,
 # and the camera sits slightly over the player's shoulder. Clicks then act at the screen centre (crosshair),
@@ -317,10 +319,21 @@ func set_shift_lock(on: bool) -> void:
 	_drag_state = DragState.NONE
 
 func _unhandled_input(event: InputEvent) -> void:
+	# L locks the pointer; it is only ever given back with Esc (a browser does that itself, see _process)
 	if event.is_action_pressed("shift_lock") and not event.is_echo():
-		set_shift_lock(not shift_locked)
+		if not shift_locked:
+			set_shift_lock(true)
+		return
+	if shift_locked and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		set_shift_lock(false)
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.pressed:
+		# Web with a mouse/trackpad: the first click on the game locks the pointer, so just moving the mouse looks around
+		# (Esc gives it back). A finger on a touchscreen arrives as an emulated mouse and keeps plain one-finger drag-to-orbit.
+		if web_auto_pointer_lock and OS.has_feature("web") and not shift_locked \
+				and event.button_index == MOUSE_BUTTON_LEFT and event.device != InputEvent.DEVICE_ID_EMULATION:
+			set_shift_lock(true)
 		match event.button_index:
 			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
 				_drag_state = DragState.ROTATING

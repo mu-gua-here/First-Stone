@@ -17,7 +17,7 @@ billboard = 1
 no_depth_test = true
 render_priority = 127
 outline_render_priority = 126
-text = "[unnamed]"
+text = " "
 font = ExtResource("2_font")
 font_size = 48
 

@@ -43,6 +43,8 @@ var _demolish_latest := {} # structure / site id -> demolish progress waiting fo
 var _site_sent := {}
 var _stock_sent := ""
 var _props_sent := {} # prop name -> [position, rotation] as last sent
+var _carry_facing := {} # peer id -> the way that player last walked (carried fruit is held in front of them)
+var _carry_last_pos := {} # peer id -> where their avatar was when the facing was last updated
 const GRAB_RANGE := 3.0 # how close a client must be to a prop to grab it (a little looser than reach, for latency)
 var _held_by := {} # peer id -> Array of names of the props that client is carrying (oldest first, up to ResourceProp.MAX_CARRY)
 
@@ -59,8 +61,11 @@ func _ready() -> void:
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 
 
+## True only once there is a live connection to talk over. A WebSocket peer is assigned as soon as the client starts
+## connecting (and a browser takes a while to finish the handshake), but RPCs fail until it is really CONNECTED.
 func _online() -> bool:
-	return not (multiplayer.multiplayer_peer is OfflineMultiplayerPeer)
+	var peer := multiplayer.multiplayer_peer
+	return not (peer is OfflineMultiplayerPeer) and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 
 func _avatar(peer_id: int) -> NetPlayer:
@@ -188,6 +193,10 @@ func _send_snapshot(peer_id: int) -> void:
 
 func _process(delta: float) -> void:
 	if not _online():
+		# Not connected (yet / any more): drop what was queued so stale chops aren't sent in a burst on connect
+		_chop_pending.clear()
+		_demolish_pending.clear()
+		_prop_pending.clear()
 		return
 	if multiplayer.is_server():
 		_carry_held_props()
@@ -430,7 +439,9 @@ func answer_prop_grab(prop_name: String, ok: bool) -> void:
 ## (they dropped it, or left)
 func _drop_held(peer_id: int, prop_name: String = "") -> void:
 	var carried: Array = _held_by.get(peer_id, [])
-	var to_drop: Array = carried.duplicate() if prop_name == "" else ([prop_name] if carried.has(prop_name) else [])
+	# Names are kept as StringName (prop.name) but arrive from the RPC as String: Array.has() treats those as different, so
+	# compare like with like or the drop silently matches nothing and the fruit stays frozen over the carrier's head
+	var to_drop: Array = carried.duplicate() if prop_name == "" else ([StringName(prop_name)] if carried.has(StringName(prop_name)) else [])
 	for dropped in to_drop:
 		carried.erase(dropped)
 		var prop := builder.get_node_or_null(NodePath(String(dropped))) as ResourceProp
@@ -449,16 +460,27 @@ func _carry_held_props() -> void:
 			_drop_held(peer_id)
 			continue
 		var carried: Array = _held_by.get(peer_id, [])
+		# Facing isn't replicated: use the way the avatar last moved
+		var last_pos: Vector3 = _carry_last_pos.get(peer_id, avatar.net_position)
+		var moved := Vector3(avatar.net_position.x - last_pos.x, 0.0, avatar.net_position.z - last_pos.z)
+		if moved.length() > 0.03:
+			_carry_facing[peer_id] = moved.normalized()
+			_carry_last_pos[peer_id] = avatar.net_position
+		elif not _carry_last_pos.has(peer_id):
+			_carry_last_pos[peer_id] = avatar.net_position
+		var forward: Vector3 = _carry_facing.get(peer_id, Vector3.FORWARD)
 		var slot := 0
 		for prop_name in carried.duplicate():
 			var prop := builder.get_node_or_null(NodePath(String(prop_name))) as ResourceProp
 			if prop == null or prop.collected:
 				carried.erase(prop_name) # collected (or gone): the stack closes up
 				continue
-			prop.global_position = avatar.net_position + ResourceProp.carry_offset(slot)
+			prop.carry_to(avatar.net_position + ResourceProp.carry_offset(slot, forward))
 			slot += 1
 		if carried.is_empty():
 			_held_by.erase(peer_id)
+			_carry_facing.erase(peer_id)
+			_carry_last_pos.erase(peer_id)
 		else:
 			_held_by[peer_id] = carried
 

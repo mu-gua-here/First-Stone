@@ -8,7 +8,22 @@ shader_type spatial;
 // interpolates linearly inside each triangle. height_at() does the same barycentric blend with
 // the same triangulation, so there is no floor()/stepping anywhere -- the low-poly look comes
 // from coarse cells + flat normals only.
-render_mode blend_mix, depth_draw_always, diffuse_lambert, specular_schlick_ggx, cull_disabled;
+// depth_prepass_alpha: the ocean is one transparent mesh with no draw sorting, so at grazing angles a far wave tile can be
+// drawn before a nearer one and blend underneath it, doubling its opacity (the pale squares in the distance). The prepass
+// lays the nearest surface's depth first so every pixel blends exactly once. If the whole ocean ever turns foam-white after
+// this, remove it: it would mean the prepass is leaking into depth_texture.
+render_mode blend_mix, depth_draw_always, depth_prepass_alpha, diffuse_lambert, specular_schlick_ggx, cull_disabled, fog_disabled;
+
+// Environment fog is applied by the engine as a colour tint only: it never raises ALPHA, so a half-transparent ocean stays
+// half see-through however thick the fog is (that's why it looked unfogged). fog_disabled turns the engine fog off for this
+// shader and the same depth fog is done below in fragment(), fading the alpha too. DayNightCycle writes these uniforms from the
+// active Environment every frame, so native and compat each get their own fog.
+group_uniforms Env_Fog;
+uniform vec3 env_fog_color : source_color = vec3(0.86, 0.87, 0.9);
+uniform float env_fog_begin = 20.0;
+uniform float env_fog_end = 200.0;
+uniform float env_fog_curve = 0.5;
+uniform float env_fog_density = 0.0; // 0 = off until DayNightCycle sets it
 
 group_uniforms Water_Colors;
 uniform vec3 deep_water_color : source_color = vec3(0.0, 0.6, 0.9);
@@ -132,6 +147,15 @@ void fragment() {
 	float fade = smoothstep(fade_start, fade_end, dist) * edge_fog_max_strength;
 	result = mix(result, edge_fog_color, fade);
 	alpha = mix(alpha, 1.0, fade);
+
+	// Depth fog like the Environment's (smoothstep between begin/end, shaped by the curve, capped by density), but it also
+	// pushes alpha up so the far ocean actually dissolves into the fog. Not applied from below (the underwater tint owns that).
+	if (!underside) {
+		float fog_t = smoothstep(env_fog_begin, max(env_fog_end, env_fog_begin + 0.01), length(VERTEX));
+		float fog_amount = pow(fog_t, env_fog_curve) * env_fog_density;
+		result = mix(result, env_fog_color, fog_amount);
+		alpha = mix(alpha, 1.0, fog_amount);
+	}
 
 	ALBEDO = result;
 	ALPHA = alpha;

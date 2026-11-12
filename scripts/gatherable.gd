@@ -21,6 +21,13 @@ class_name Gatherable
 ## instead of spawning new ones. The tree's fruit count is the number of children. Needs Structure.secondary_resource_type.
 @export var fruit_container: Node3D
 
+## What stands here once this object is used up (a stump for a tree). Leave empty to simply remove it.
+@export var depleted_scene: PackedScene
+## A bush: fruit is picked one at a time (E for the player, one per gather cycle for citizens) without any progress bar,
+## and the bush stays standing, bare, once the last one is gone. The player can still chop it down like a tree
+## (hold click): the fruit still hanging drops, and depleted_scene (trampled bushes) is left behind.
+@export var pick_fruit_only := false
+
 ## Optional "you can interact with me" marker (a billboard Sprite3D in the tree scene, hidden by default).
 ## It is shown while the player is within hint_distance of this object.
 @export var interact_hint: Node3D
@@ -50,8 +57,55 @@ func get_fruit_position(index: int) -> Vector3:
 func update_fruit_visibility(progress: float) -> void:
 	var total := get_fruit_count()
 	var gone := floori(progress * total)
-	for i in total:
-		(fruit_container.get_child(i) as Node3D).visible = i >= gone
+	for i in range(mini(gone, total)):
+		(fruit_container.get_child(i) as Node3D).visible = false # (never shows one again: some may already be picked)
+
+## Fruits still hanging that nobody has picked (pick_fruit_only bushes)
+func fruits_left() -> int:
+	if fruit_container == null:
+		return 0
+	var count := 0
+	for fruit in fruit_container.get_children():
+		if (fruit as Node3D).visible:
+			count += 1
+	return count
+
+## Loading a save: hides fruit until only `left` hang here. The hidden ones count as picked, so chopping the tree later
+## doesn't drop them a second time (they already exist as props, or were eaten).
+func set_fruits_left(left: int) -> void:
+	if fruit_container == null:
+		return
+	var to_remove := fruits_left() - left
+	for fruit in fruit_container.get_children():
+		if to_remove <= 0:
+			break
+		var node := fruit as Node3D
+		if node.visible:
+			node.visible = false
+			node.set_meta("picked", true)
+			to_remove -= 1
+
+## A bush with nothing left to pick (it stays in the world, just bare)
+func is_depleted() -> bool:
+	return pick_fruit_only and fruits_left() <= 0
+
+## Takes one hanging fruit off (hides it) and returns where it hung, or Vector3.INF if there is none
+func take_fruit() -> Vector3:
+	if fruit_container == null:
+		return Vector3.INF
+	for fruit in fruit_container.get_children():
+		var node := fruit as Node3D
+		if node.visible:
+			node.visible = false
+			node.set_meta("picked", true)
+			return node.global_position
+	return Vector3.INF
+
+## Whether the index-th fruit was already picked by hand (so chopping the bush doesn't drop it a second time)
+func is_fruit_picked(index: int) -> bool:
+	if fruit_container == null or index >= fruit_container.get_child_count():
+		return false
+	return fruit_container.get_child(index).get_meta("picked", false)
 
 func _ready() -> void:
 	add_to_group("gatherable")
@@ -70,5 +124,5 @@ func _process(delta: float) -> void:
 		return
 	_hint_timer = HINT_CHECK_INTERVAL
 	var player := Globals.player
-	interact_hint.visible = player != null \
+	interact_hint.visible = player != null and not is_depleted() \
 			and global_position.distance_squared_to(player.global_position) <= hint_distance * hint_distance

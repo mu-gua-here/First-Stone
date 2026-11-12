@@ -5,11 +5,10 @@ extends Node
 @export var citizen_name: String = NameGenerator.generate_name()
 @export var age: int = randi_range(2, 100)
 @export var energy: float = 100.0
-@export var metabolism: float = randf_range(0.005, 0.01)
 @export var job: String = ""
 @export var job_task: int = Structure.JobTask.NONE # what the job makes them do automatically, see Structure.JobTask
 @export var workplace_id: String = "" # Builder.placed_structures id of the workplace employing them
 @export var job_satisfaction: float = 50.0
-@export var happiness: float = 50.0
+@export var happiness: float = 100.0
 @export var housing_satisfaction: float = 0.0
 @export var approval: float = 50.0

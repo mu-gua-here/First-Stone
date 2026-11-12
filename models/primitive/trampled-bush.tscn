@@ -1,0 +1,58 @@
+[gd_scene format=3 uid="uid://c1701ix2nw8f0"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_flat"]
+albedo_color = Color(0.2322593, 0.574409, 0.44917363, 1)
+roughness = 0.95
+
+[sub_resource type="SphereMesh" id="SphereMesh_blob"]
+material = SubResource("StandardMaterial3D_flat")
+radius = 1.0
+height = 2.0
+radial_segments = 8
+rings = 4
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_twig"]
+albedo_color = Color(0.33, 0.24, 0.14, 1)
+roughness = 0.95
+
+[sub_resource type="BoxMesh" id="BoxMesh_twig"]
+material = SubResource("StandardMaterial3D_twig")
+size = Vector3(0.9, 0.06, 0.08)
+
+[node name="TrampledBush" type="Node3D" unique_id=904923476]
+
+[node name="Leaves" type="Node3D" parent="." unique_id=1540273486]
+
+[node name="Flat1" type="MeshInstance3D" parent="Leaves" unique_id=1988924341]
+transform = Transform3D(0.9, 0, 0, 0, 0.16, 0, 0, 0, 0.8, 0, 0.1, 0)
+mesh = SubResource("SphereMesh_blob")
+
+[node name="Flat2" type="MeshInstance3D" parent="Leaves" unique_id=1439872625]
+transform = Transform3D(0.7, 0, 0.2, 0, 0.3117677, 0, -0.15, 0, 0.55, 0.65, 0.07, 0.4)
+mesh = SubResource("SphereMesh_blob")
+
+[node name="Flat5" type="MeshInstance3D" parent="Leaves" unique_id=279358679]
+transform = Transform3D(0.7, 0, 0.2, 0, 0.3117677, 0, -0.15, 0, 0.55, 0.5741272, 0.07, -0.57988465)
+mesh = SubResource("SphereMesh_blob")
+
+[node name="Flat3" type="MeshInstance3D" parent="Leaves" unique_id=1195151188]
+transform = Transform3D(0.6, 0, -0.1, 0, 0.22039978, 0, 0.1, 0, 0.65, -0.7, 0.07, 0.3)
+mesh = SubResource("SphereMesh_blob")
+
+[node name="Flat4" type="MeshInstance3D" parent="Leaves" unique_id=208559265]
+transform = Transform3D(0.65, 0, 0.1, 0, 0.2125536, 0, -0.1, 0, 0.5, -0.43319395, 0.06, -0.65010303)
+mesh = SubResource("SphereMesh_blob")
+
+[node name="Twigs" type="Node3D" parent="." unique_id=123636910]
+
+[node name="Twig1" type="MeshInstance3D" parent="Twigs" unique_id=1120084564]
+transform = Transform3D(0.9, 0, 0.4, 0, 1, 0, -0.4, 0, 0.9, 0.3, 0.30471873, 0.2)
+mesh = SubResource("BoxMesh_twig")
+
+[node name="Twig2" type="MeshInstance3D" parent="Twigs" unique_id=742122724]
+transform = Transform3D(0.3, 0, -0.95, 0, 1, 0, 0.95, 0, 0.3, -0.35, 0.23095685, -0.15)
+mesh = SubResource("BoxMesh_twig")
+
+[node name="Twig3" type="MeshInstance3D" parent="Twigs" unique_id=249492172]
+transform = Transform3D(-0.8180818, -0.11501994, 0.5634825, 0.16667095, 0.8903293, 0.42371517, -0.55042064, 0.44054973, -0.7091917, 0.23344745, 0.33126357, -0.4075234)
+mesh = SubResource("BoxMesh_twig")

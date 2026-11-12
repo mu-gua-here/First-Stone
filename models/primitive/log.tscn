@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://d2gjar21t1e0s"]
+
+[ext_resource type="PackedScene" uid="uid://4r7kshtot0iw" path="res://models/primitive/log.glb" id="1_0gtcn"]
+
+[sub_resource type="PhysicsMaterial" id="PhysicsMaterial_fuf3a"]
+rough = true
+absorbent = true
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_7d2os"]
+height = 1.55
+radius = 0.36
+
+[node name="log" unique_id=193601299 instance=ExtResource("1_0gtcn")]
+
+[node name="RigidBody3D" type="RigidBody3D" parent="." index="1" unique_id=532629901]
+mass = 5.0
+physics_material_override = SubResource("PhysicsMaterial_fuf3a")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="RigidBody3D" index="0" unique_id=99239924]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0)
+shape = SubResource("CylinderShape3D_7d2os")

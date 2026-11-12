@@ -10,7 +10,7 @@ class_name Structure
 enum Type { DECORATIVE, HOUSE, WORKPLACE, SHOP }
 
 # What a citizen employed at a WORKPLACE does with their time (see citizen.gd _update_job)
-enum JobTask { NONE, GATHER, BUILD, HAUL }
+enum JobTask { NONE, GATHER, BUILD, HAUL, FORAGE }
 
 @export_subgroup("Model")
 @export var display_name: String = "" # Shown in the build HUD. Falls back to the item name
@@ -25,7 +25,7 @@ enum JobTask { NONE, GATHER, BUILD, HAUL }
 		notify_property_list_changed()
 @export var capacity: int = 0 # Job slots if WORKPLACE (unused for HOUSE — see residential_floors below)
 @export var job_title: String = "" # WORKPLACE: title given to employees (e.g. "Woodcutter"). Falls back to the display name
-@export var job_task: JobTask = JobTask.NONE # WORKPLACE: what employees automatically do (GATHER = chop the nearest tree, BUILD = work construction sites, HAUL = push loose logs to the stockpile)
+@export var job_task: JobTask = JobTask.NONE # What employees automatically do (GATHER = chop the nearest tree and push its logs, BUILD = work construction sites, HAUL = push loose logs to the stockpile, FORAGE = pick fruit from bushes and carry it to the food stockpile)
 @export var happiness_bonus: float = 0.0 # Passive happiness boost for nearby citizens (decorative structures)
 
 @export_subgroup("Housing")

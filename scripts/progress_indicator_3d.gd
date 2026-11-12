@@ -29,8 +29,13 @@ class_name ProgressIndicator3D
 
 var _fill_style: StyleBoxFlat
 var _bg_style: StyleBoxFlat
+var _status_text := "" # when non-empty, shown over the bar instead of the percentage (e.g. construction sites: "2/5 logs")
 
 func _ready() -> void:
+	# The viewport texture is hooked up here, not in the scene: a ViewportTexture saved in the .tscn resolves its
+	# "Sprite3D/SubViewport" path when the scene is instanced, which logs "Path to node is invalid" whenever the
+	# indicator is created and parented from code before it is in the tree.
+	sprite.texture = viewport.get_texture()
 	# The LOOK (rounded corners, border) is authored in the scene: theme overrides on the ProgressBar,
 	# exactly like the HUD bars. Don't build new StyleBoxes here -- a fresh StyleBoxFlat has square corners
 	# and would replace the rounded ones. Those StyleBoxes are shared by every instance of this scene, so
@@ -49,11 +54,24 @@ func _private_copy(style_name: String) -> StyleBoxFlat:
 
 func set_progress(value01: float) -> void:
 	bar.value = clamp(value01, 0.0, 1.0)
-	value_label.text = str(roundi(bar.value * 100.0))
+	_refresh_label()
+
+# Overrides the number over the bar with custom text ("" goes back to the percentage / hidden)
+func set_status_text(text: String) -> void:
+	if text == _status_text:
+		return
+	_status_text = text
+	_refresh_label()
+
+func _refresh_label() -> void:
+	if not is_node_ready():
+		return
+	value_label.text = _status_text if _status_text != "" else str(roundi(bar.value * 100.0))
+	_apply_value_visibility()
 
 func _apply_value_visibility() -> void:
 	if is_node_ready():
-		value_label.visible = show_value and sprite.visible
+		value_label.visible = (show_value or _status_text != "") and sprite.visible
 
 # Changes the fill color after the fact -- used by construction sites to
 # flag "stalled, missing resources" (e.g. a red/orange tint) without needing
