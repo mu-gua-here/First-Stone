@@ -1,58 +1,98 @@
-# ** BUCKET_LIST.md **
-#### **@mu-gua-here**
+# **BUCKET_LIST.md**
+
+## **@mu-gua-here**
 
 A list of outstanding tasks ranked by importance for this project
 Used to keep track of what needs to be done
 
 ## IMPLEMENTATIONS
+
 Major things that have yet to be added to the game
 
-	### HIGH PRIORITY
-	1. Policy editor to set rules for citizens
-	2. Set up networking server before pushing to itch
-	
-	### MID PRIORITY
-	1. Give the lodges their own models (currently reuse the hut) + a stockpile marker model
-	
-	### LOW PRIORITY
-	1. 
+### HIGH PRIORITY
+
+1. Policy editor to set rules for citizens
+2. Punish player for not assigning citizens a home (e.g.: happiness decreases)
+3. More structures (straw shelter, gov buildings, storage facilities, research centres etc.)
+4. More tile types with unique attributes (e.g. farmable land)
+
+### MID PRIORITY
+
+1. Allow player to use different types of storage: Build editor allows player to define tiles for storage areas
+2. Gather some wind, ocean ambient tracks that play based on proximity to ocean, land etc
+
+### LOW PRIORITY
+
+1. Set up networking server before pushing to itch
+2. Inventory (tab) & Hotbar (showing bottom of screen, fade when inactive)
+3. Craftable items (e.g.: concrete, tools) that naturally leads to new structures being "unlocked"
 
 ## BUGS
+
 Major unexpected errors when completing certain tasks
-	
-	### HIGH PRIORITY
-	1. Navigation obstacles are ignored by NPCs
-	2. Resources can get stuck in crevices or in huts
-	3. Energy management: if running should use energy twice as fast, also must balance energy use with time/day
-	
-	### MID PRIORITY
-	1. Pathfinding does not work because structures can be changed
-	
-	### LOW PRIORITY
-	1. 
+
+### HIGH PRIORITY
+
+1. Pathfinding need constant rebaking because structures can be changed
+2. Energy management: if running should use energy twice as fast, also must balance energy use with time/day
+3. Pointerlock can break sometimes on web
+
+### MID PRIORITY
+
+1.
+
+### LOW PRIORITY
+
+1. 
 
 ## ISSUES
+
 Structural problems that prevent dev from adding new features
-	
-	### HIGH PRIORITY
-	1. Need to reconsider role of stockpiles in game:
-		is it predefined but modifiable through policies or set by player?
-	
-	### MID PRIORITY
-	1. 
-	
-	### LOW PRIORITY
-	1. 
+
+### HIGH PRIORITY
+
+1.
+
+### MID PRIORITY
+
+1.
+
+### LOW PRIORITY
+
+1. Resources can get stuck in crevices or in huts
 
 ## IMPROVEMENTS
-Quality-of-life additions, minor issues and aesthetic improvements
 
-	### HIGH PRIORITY
-	1. Batch trees together for better performance blud
-	2. Fix up the food stockpile sign vro
-	
-	### MID PRIORITY
-	1. 
-	
-	### LOW PRIORITY
-	1. 
+Quality-of-life additions, gameplay, minor issues and aesthetic improvements
+
+### HIGH PRIORITY
+
+1. ADD DIFFERENT GRAPHICS MODES for mobile vs desktop (look at Taipei Rush)
+2. UI selection panel looks trash
+
+### MID PRIORITY
+
+1. Batch trees together for better performance blud
+2. Automatic zoom in & out restricts player viewing freedom, manual camera should take precedence
+3. Toggleable visual indicator to find residents and npcs
+4. Key binds: esc is game menu, tab is inventory or a different menu, pointer-lock is ctrl
+
+### LOW PRIORITY
+
+1. Allow player to set custom keybinds
+
+## OTHERS
+
+### HIGH PRIORITY
+
+1. Fix up `CREDITS.md` properly
+2. Fix up `README.md` too
+3. Think of a better game name than "First Stone"
+
+### MID PRIORITY
+
+1.
+
+### LOW PRIORITY
+
+1.

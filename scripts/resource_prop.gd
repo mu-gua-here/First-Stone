@@ -28,6 +28,8 @@ const CARRY_HEIGHT := 1.0 # the first carried item is held at arm level: this fa
 const CARRY_FORWARD := 0.65 # ...and this far in front of the carrier
 const CARRY_SPACING := 0.22 # each further carried item sits this much higher, forming a small stack in front of them
 const MAX_CARRY := 10 # most small items one player can carry at a time
+const MAX_CARRY_LOGS := 1 # a log is heavy: one at a time, and it fills the carrier's arms (no fruit alongside it)
+const LOG_CARRY_SPEED_MULT := 0.5 # a carrier holding a log walks at this share of its normal speed (see Carrier._carry_speed_mult)
 const GRAB_ANIM_TIME := 0.25 # seconds a grabbed item takes to hop from where it lay into the carrier's hands
 const GRAB_ANIM_ARC := 0.25 # how high (m) it arcs on the way
 const GRAB_ANIM_POP := 0.3 # extra scale at the peak of the hop (0.3 = 30% bigger)
@@ -38,6 +40,29 @@ static func carry_offset(index: int, forward: Vector3 = Vector3.FORWARD) -> Vect
 	var flat := Vector3(forward.x, 0.0, forward.z)
 	flat = flat.normalized() if flat.length() > 0.001 else Vector3.FORWARD
 	return flat * CARRY_FORWARD + Vector3.UP * (CARRY_HEIGHT + index * CARRY_SPACING)
+
+## True for a log (a stacked resource type): heavy, so it is carried MAX_CARRY_LOGS at a time and slows its carrier down
+func is_log() -> bool:
+	var owning_builder = get_meta("builder", null)
+	return owning_builder != null and owning_builder.is_stacked_type(String(get_meta("resource_type", "")))
+
+## Whether a carrier already holding `carried` (an Array of ResourceProps) has room for `prop`. A log needs a free log slot and
+## empty-enough arms (no fruit alongside it); small items stack up to MAX_CARRY, but not while a log is in hand.
+static func has_room_for(carried: Array, prop: ResourceProp) -> bool:
+	var logs := 0
+	for held_prop in carried:
+		if is_instance_valid(held_prop) and (held_prop as ResourceProp).is_log():
+			logs += 1
+	if prop.is_log():
+		return logs < MAX_CARRY_LOGS and logs == carried.size()
+	return logs == 0 and carried.size() < MAX_CARRY
+
+## How much slower a carrier walks for what is in its arms: 1.0 empty-handed or with fruit, LOG_CARRY_SPEED_MULT with a log
+static func carry_speed_mult(carried: Array) -> float:
+	for held_prop in carried:
+		if is_instance_valid(held_prop) and (held_prop as ResourceProp).is_log():
+			return LOG_CARRY_SPEED_MULT
+	return 1.0
 
 var collected: bool = false # set once the prop was used up (consume()): it no longer counts or moves
 ## True while this prop holds a slot on its stockpile's pile: first flying to it, then (once _arrived) lying on it frozen in
@@ -156,21 +181,63 @@ func _leave_pile() -> void:
 	in_pile = false
 	_arrived = false
 
-## Small items (fruit) are picked up with E instead of shoved around: the player carries it in front of them,
-## and drops it again with Q (or just leaves it lying in the food stockpile, which counts it as usual).
-## Logs are shoved instead, except the ones lying on the stockpile: those can be taken off it (stealing from the pile).
+## Its pile tile stopped being a stockpile (the zone was painted over): a loose physics body again, where it lies
+func unpile() -> void:
+	if not in_pile:
+		return
+	_leave_pile()
+	freeze = false
+	sleeping = false
+
+## Anything can be picked up with E: the carrier holds it in front of them and drops it again with Q (or just leaves it
+## lying in its stockpile, which counts it as usual). Small items (fruit) stack up to MAX_CARRY; a log is heavy, so only
+## MAX_CARRY_LOGS at a time and it slows the carrier (see has_room_for / carry_speed_mult). A log lying on the pile can be
+## taken off it too (stealing from the pile).
 ## Only the simulating copy (offline / host) can be grabbed; a client asks the server (WorldSync.req_prop_grab).
 func can_be_grabbed() -> bool:
 	if collected or held or is_puppet:
 		return false
 	if in_pile:
 		return _arrived # still flying onto the pile: no; lying on it: yes, whatever it is
-	var owning_builder = get_meta("builder", null)
-	return owning_builder == null or not owning_builder.is_stacked_type(String(get_meta("resource_type", "")))
+	return true
+
+const CARRY_LOG_ALONG_HEADING := false # false: a carried log lies flat across its carrier's arms; true: flat, pointing the way they walk
+const CARRY_TURN_RATE := 14.0 # how fast a carried log swings round to follow its carrier's heading (per second)
+
+var _log_axis_local := Vector3.INF # the log's long axis in its own frame (horizontal), read once from its cylinder collider
+
+## The log's long axis in its own frame: the axis of its cylinder collider (log.tscn turns it onto Z), flattened
+func _long_axis() -> Vector3:
+	if _log_axis_local == Vector3.INF:
+		_log_axis_local = Vector3.FORWARD
+		for node in find_children("*", "CollisionShape3D", true, false):
+			var shape_node := node as CollisionShape3D
+			if shape_node.shape is CylinderShape3D or shape_node.shape is CapsuleShape3D:
+				var axis := shape_node.transform.basis * Vector3.UP # a cylinder / capsule runs along its local Y
+				var flat := Vector3(axis.x, 0.0, axis.z)
+				if flat.length() > 0.1:
+					_log_axis_local = flat.normalized()
+				break
+	return _log_axis_local
+
+## A carried log lies flat (no tilt, whatever way it was grabbed) and turns to follow the way its carrier faces / last walked,
+## also while they stand still. Only the yaw is steered; the swing is smoothed so it doesn't snap.
+func _face_carry_direction(forward: Vector3) -> void:
+	if not is_log():
+		return
+	var heading := Vector3(forward.x, 0.0, forward.z)
+	if heading.length() < 0.001:
+		return
+	heading = heading.normalized()
+	var wanted := heading if CARRY_LOG_ALONG_HEADING else Vector3(-heading.z, 0.0, heading.x) # across the arms: the carrier's right
+	var target := Quaternion(Vector3.UP, _long_axis().signed_angle_to(wanted, Vector3.UP))
+	var delta := get_physics_process_delta_time() if Engine.is_in_physics_frame() else get_process_delta_time()
+	global_basis = Basis(global_basis.get_rotation_quaternion().slerp(target, 1.0 - exp(-CARRY_TURN_RATE * delta)))
 
 ## Moves a held item to its spot in its carrier's hands. Right after grab() it hops there along a small arc with a pop of scale
 ## (same TRANS_BACK ease-out as the flight onto a stockpile pile); afterwards it just sits at `target`.
-func carry_to(target: Vector3) -> void:
+func carry_to(target: Vector3, forward: Vector3 = Vector3.FORWARD) -> void:
+	_face_carry_direction(forward)
 	var t := clampf(float(Time.get_ticks_msec() - _grab_start_ms) / 1000.0 / GRAB_ANIM_TIME, 0.0, 1.0)
 	if t >= 1.0:
 		global_position = target

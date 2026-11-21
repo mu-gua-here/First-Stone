@@ -27,6 +27,10 @@ class_name Gatherable
 ## and the bush stays standing, bare, once the last one is gone. The player can still chop it down like a tree
 ## (hold click): the fruit still hanging drops, and depleted_scene (trampled bushes) is left behind.
 @export var pick_fruit_only := false
+## A bush that is still standing grows its fruit back: a bush stripped bare is full again after this many in-game days, one fruit
+## at a time (so the gap between fruits is this divided by the number of fruit on it). A bush that gets chopped down does not come back.
+@export var fruit_regrow_days := 3.0
+var _fruit_regrow_clock := 0.0 # in-game days of growth stored toward the next fruit
 
 ## Optional "you can interact with me" marker (a billboard Sprite3D in the tree scene, hidden by default).
 ## It is shown while the player is within hint_distance of this object.
@@ -88,6 +92,35 @@ func set_fruits_left(left: int) -> void:
 ## A bush with nothing left to pick (it stays in the world, just bare)
 func is_depleted() -> bool:
 	return pick_fruit_only and fruits_left() <= 0
+
+## Lets `days` in-game days of growth pass: brings back at most one fruit per share of fruit_regrow_days, one after another,
+## never all at once. Returns how many came back. Only bushes (pick_fruit_only) regrow; a full bush stores no growth.
+func regrow_fruit(days: float) -> int:
+	if not pick_fruit_only or fruit_container == null or fruit_regrow_days <= 0.0:
+		return 0
+	var total := get_fruit_count()
+	var missing := total - fruits_left()
+	if missing <= 0:
+		_fruit_regrow_clock = 0.0
+		return 0
+	_fruit_regrow_clock += days
+	var gap := fruit_regrow_days / float(total)
+	var grown := 0
+	while _fruit_regrow_clock >= gap and missing > 0:
+		_fruit_regrow_clock -= gap
+		missing -= 1
+		grown += 1
+		_show_one_fruit()
+	return grown
+
+# Puts the first fruit that is not hanging back on the bush (and forgets it was picked, so it can be picked again)
+func _show_one_fruit() -> void:
+	for fruit in fruit_container.get_children():
+		var node := fruit as Node3D
+		if node != null and not node.visible:
+			node.visible = true
+			node.set_meta("picked", false)
+			return
 
 ## Takes one hanging fruit off (hides it) and returns where it hung, or Vector3.INF if there is none
 func take_fruit() -> Vector3:

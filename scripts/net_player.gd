@@ -4,7 +4,7 @@ class_name NetPlayer
 ## One avatar per connected player, created by the server (see network.gd) and replicated to everybody by the
 ## MultiplayerSpawner in main.tscn. The node is named after its owner's peer id.
 ##
-## The SERVER has authority over every avatar. The owning client reports its state (position, health, energy) to
+## The SERVER has authority over every avatar. The owning client reports its state (position, health, hunger, energy) to
 ## the server with an RPC, the server stores it in the properties below, and the MultiplayerSynchronizer child
 ## ("Sync", see net_player.tscn) sends them to ALL clients. (A client cannot send synchronizer data straight to
 ## other clients -- clients only talk to the server.)
@@ -18,6 +18,7 @@ class_name NetPlayer
 var net_position := Vector3.ZERO
 var player_name := ""
 var net_health := 100
+var net_hunger := 100
 var net_energy := 100
 var player_color := Color(1.0, 0.55, 0.2) # this player's colour, chosen on their own client (see Network)
 
@@ -44,6 +45,7 @@ var _pending_push := Vector3.ZERO
 var _prev_position := Vector3.ZERO
 var _shown_name := "\n" # impossible name, so the first update always draws
 var _shown_health := -1
+var _shown_hunger := -1
 var _shown_energy := -1
 var _shown_color := Color(0, 0, 0, 0) # impossible colour (alpha 0), so the first update always applies
 var _last_push_msec := 0 # server side: when this avatar's owner last pushed somebody
@@ -66,13 +68,14 @@ func _is_mine() -> bool:
 # --- Reporting state (owner -> server) ---
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func submit_state(pos: Vector3, health: int, energy: int) -> void:
+func submit_state(pos: Vector3, health: int, hunger: int, energy: int) -> void:
 	if not multiplayer.is_server():
 		return
 	if multiplayer.get_remote_sender_id() != owner_id:
 		return # only the owner may change their avatar
 	net_position = pos
 	net_health = clampi(health, 0, 100)
+	net_hunger = clampi(hunger, 0, 100)
 	net_energy = clampi(energy, 0, 100)
 
 
@@ -148,7 +151,7 @@ func _physics_process(delta: float) -> void:
 		_send_timer = send_interval
 		var player := Globals.player as Carrier
 		if player != null:
-			submit_state.rpc_id(1, player.global_position, roundi(player.health), roundi(Globals.player.get("energy")))
+			submit_state.rpc_id(1, player.global_position, roundi(player.health), roundi(player.hunger), roundi(player.energy))
 		return
 
 	# Somebody else's avatar (on the server too): follow their reported position
@@ -191,7 +194,8 @@ func _update_nameplate() -> void:
 	if player_name != _shown_name:
 		_shown_name = player_name
 		nameplate.set_player_name(player_name if player_name != "" else "...")
-	if net_health != _shown_health or net_energy != _shown_energy:
+	if net_health != _shown_health or net_hunger != _shown_hunger or net_energy != _shown_energy:
 		_shown_health = net_health
+		_shown_hunger = net_hunger
 		_shown_energy = net_energy
-		nameplate.set_stats(net_health, net_energy)
+		nameplate.set_stats(net_health, net_hunger, net_energy)

@@ -19,9 +19,15 @@ var index: int = 0 # Index of structure being built
 
 @export_category("Citizens")
 @export var starting_citizens := 5
+## Births: a citizen whose health AND energy have both stayed above birth_min_stat for birth_interval_days in-game days in a row
+## gets a chance of a child. The odds are birth_chance times a random factor (0.5 to 1.5) rolled each time, so some stretches are luckier.
+@export var birth_min_stat := 80.0
+@export var birth_interval_days := 5.0
+@export_range(0.0, 1.0) var birth_chance := 0.6
 
-@export var world: GridMap ## the GridMap that holds the structures you build (NOT the ground: that's the Base GridMap)
-@export var ground: GridMap ## the Base GridMap under the structures; shows the construction tile while a site is being built
+@export var world_scene: WorldScene
+var world: GridMap ## the GridMap that holds the structures you build (NOT the ground: that's the Base GridMap)
+var ground: GridMap ## the Base GridMap under the structures; shows the construction tile while a site is being built
 @export var selector: Node3D # The 'cursor'
 @export var preview: MeshInstance3D ## shows the selected structure's MeshLibrary mesh on the cursor
 @export var view_camera: Camera3D # Used for raycasting mouse
@@ -60,18 +66,19 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 ## Prints what each mouse click hits and how many trees/structures are registered (turn off when done).
 @export var debug_picking := false
 
-@export_group("Stockpile")
-## Logs only count once pushed within reach of this point. On by default: it is set to wherever
-## the player starts, so the pile is never stranded far from the action.
-@export var stockpile_position := Vector3.ZERO
-## Size of the stockpile in grid cells (2 = a 2x2 block). Those cells can't be built on, and a settled log counts
-## once it is inside the block. The yellow marker (StockpileMarker in main.tscn) should be a flat box this big.
-@export var stockpile_size_cells := 2
+@export_group("Zones")
+## What the tiles are designated as (stockpiles, gathering areas...) is data on the tiles (ZoneMap), painted in zone mode
+## (Tab, then Z). This GridMap ("Zones" in main.tscn) only DRAWS it: its MeshLibrary has one flat item per zone
+## (structures/zone-tiles.tres). Line it up with the Structures GridMap by hand in the editor (position, cell size,
+## cell scale): the game uses its transform as it is. Tiles painted on it in the editor are cleared at start.
+@export var zone_overlay: GridMap
+## Tiles the world starts with, as cell rectangles (x, z, width, height). A loaded save replaces them.
+@export var starting_log_zone := Rect2i(-1, -1, 2, 2)
+@export var starting_food_zone := Rect2i(3, -1, 2, 2)
 
 @export_group("HUD nodes")
 @export var build_info_label: Label # what's selected while in build mode
 @export var build_hint_label: Label # transient warnings (e.g. "not enough wood")
-@export var stockpile_marker: Node3D # flat disc marking where logs must be pushed
 @export var stockpile_sign: StockpileSign # wooden board at the disc's edge that says "STOCKPILE" and shows the count
 @export var popup_scene: PackedScene # the floating "+1 Wood" (pickup_popup.tscn), shown where a log is collected
 @export var cursor_sprite: Sprite3D # tile outline on the build cursor (Selector/Sprite): green = can build here, red = can't
@@ -83,11 +90,7 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 @export var stack_spacing := Vector3(1.5, 0.6, 0.7) # metres between logs (x), layers (y) and rows (z)
 @export var stack_rotation_degrees := Vector3(0, 90, 0) # how a log lies on the pile: change this if yours points the wrong way
 @export_group("Food")
-## The food stockpile: a second block of grid cells that holds only fruit. Like the log stockpile it can't be built on.
-## Left at (0, 0, 0) it is placed a few cells beside the log stockpile. FoodStockpileMarker in main.tscn should be a flat box this big.
-@export var food_stockpile_position := Vector3.ZERO
-@export var food_stockpile_size_cells := 2
-@export var food_stockpile_marker: Node3D
+## Fruit piles up on tiles zoned FOOD_STOCKPILE, logs on tiles zoned LOG_STOCKPILE (see ZoneMap). Those tiles can't be built on.
 @export var food_stockpile_sign: StockpileSign # green "FOOD STORE" board at the food area's edge (food_stockpile_sign.tscn); bounces when fruit is stored
 ## Heavy resource types that are only pushed around (logs). Anything else (fruit) is small enough to grab with E and carry.
 @export var stacked_resource_types: Array[String] = ["wood"]
@@ -103,14 +106,25 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 ## A type with no entry falls back to resource_prop_meshes (logs) / a placeholder sphere.
 @export var resource_prop_scenes: Dictionary[String, PackedScene] = {}
 @export var food_stack_lift := 0.2 # how far above the food stockpile marker the bottom layer's fruit sit
-## Energy one unit of food ("food" in the stockpile) restores when eaten.
-@export var food_energy := 5.0
-## Citizens and the player go and eat from the stockpile once their energy drops below this...
+## Hunger one unit of food ("food" in the stockpile) restores when eaten.
+@export var food_hunger := 5.0
+## Citizens and the player go and eat from the stockpile once their hunger drops below this...
 @export var hungry_below := 50.0
-## ...and keep eating until their energy reaches this.
+## ...and keep eating until their hunger reaches this.
 @export var eat_until := 85.0
 ## How far (flat metres) beyond the edge of the stockpile block someone may stand and still eat.
 @export var eat_reach := 2.0
+@export_group("Regrowth")
+## In-game days a felled tree's stump takes to grow a new tree (0 = trees never come back). Bush fruit regrows on the bush itself,
+## see Gatherable.fruit_regrow_days.
+@export var tree_regrow_days := 15.0
+@export_group("Rest")
+## Time of day (0..1; 0 = midnight, 0.25 = 6 AM, 0.5 = noon, 0.75 = 6 PM) when citizens go to a shelter to sleep...
+@export_range(0.0, 1.0) var night_starts := 0.8
+## ...and when they get up again
+@export_range(0.0, 1.0) var night_ends := 0.25
+## How close (flat metres, from the shelter's centre) someone must be to count as resting in it
+@export var shelter_reach := 3.5
 @export_group("")
 
 var citizens = []
@@ -124,7 +138,9 @@ var buildings: Dictionary = {} # id (String) -> BuildingInstance, for placed HOU
 
 var construction_sites: Dictionary = {} # id (String) -> ConstructionSite, for structures still being built
 var _site_cells: Dictionary = {} # Vector3i -> site id
-var _stockpile_cells: Dictionary = {} # Vector3i -> true, the cells the stockpile covers (never buildable)
+var zones := ZoneMap.new() # what every tile is designated as (stockpile, gathering...), see zone_map.gd
+var _cell_piles: Dictionary = {} # zone tile (Vector3i) -> Array of the props holding a slot on its pile, index = slot (null = a gap)
+var _zone_floor: Dictionary = {} # zone tile (Vector3i) -> ground height under it, cached once the ground collision answers
 var construction_visuals: Dictionary = {} # id (String) -> {"bar": ProgressIndicator3D, "cell": Vector3i, "prev_item": int, "prev_orientation": int}
 
 # MeshLibrary item ids, resolved once from the names (see _resolve_mesh_items)
@@ -156,8 +172,15 @@ var demolish_progress: Dictionary = {} # id (String) -> 0.0-1.0 how far a struct
 var demolish_visuals: Dictionary = {} # id (String) -> DemolishRing3D
 var _demolish_touched: Dictionary = {} # id (String) -> msec when labour last went into it (progress fades once it stops)
 var _count_timer := 0.0 # how long until the live stockpile counts are recomputed
-var _piles: Dictionary = {} # resource type -> Array of the props holding a slot on that pile, index = slot (null = a gap)
 var _rolled_yields := {} # tree id -> {"primary": int, "secondary": int}: what this particular tree drops (rolled once, server/offline only)
+
+# Regrowth (see _regrow_tick)
+const REGROW_CHECK_INTERVAL := 1.0 # real seconds between regrowth checks (it only has to be roughly on time)
+const REGROW_CLEARANCE := 1.5 # a stump waits while the player or a citizen stands this close (they'd end up inside the new trunk)
+var _regrow_timer := 0.0
+var _last_regrow_day := -1.0
+var _stumps: Array[Dictionary] = [] # server / offline: one per stump waiting to regrow {name, scene_path, xform, planted, due_day}
+var _stump_nodes: Dictionary = {} # tree node name -> its stump, on every peer (so the "regrow" event can find and remove it)
 
 var plane: Plane # Used for raycasting mouse
 
@@ -166,6 +189,9 @@ var plane: Plane # Used for raycasting mouse
 # building. Tab leaves interact mode from either.
 var interact_mode: bool = false  # true = interact mode (cursor out: building, or deleting when delete_mode is on)
 var delete_mode: bool = false # only while interact_mode: clicking a building takes it apart (see Player._try_start_work)
+var zone_mode: bool = false # only while interact_mode: click/drag paints tiles with zone_brush (Z in interact mode; B or Z leaves)
+var zone_brush: int = ZoneMap.Type.LOG_STOCKPILE # the zone the paint brush lays down (ZoneMap.Type.NONE rubs zones out)
+var _zone_last_cell: Variant = null # the tile the brush last painted this stroke (null = no stroke going)
 
 const DELETE_MODE_HINT := "DELETE MODE - click and hold a building to take it apart\n[B] back to building    [Tab] leave interact mode"
 const NO_ID := ""
@@ -194,8 +220,11 @@ func _ready():
 
 	map = DataMap.new()
 	plane = Plane(Vector3.UP, pick_plane_y)
-	_snap_stockpile_to_grid()
-
+	
+	world = world_scene.get_structures()
+	ground = world_scene.get_base()
+	_setup_zones() # needs `world` (cell size) and `ground`, so it runs after they are assigned
+	
 	_resolve_mesh_items()
 	_fit_cursor()
 	_hotbar_count = structures.size()
@@ -217,9 +246,7 @@ func _ready():
 		if node is Gatherable and node.structure != null:
 			register_gatherable(node, node.structure)
 
-	# Ground probes (stockpile marker) need the GridMap's collision registered with the physics server
-	await get_tree().physics_frame
-	_place_stockpile_marker()
+	# (Pile heights are ground probes: they run lazily and are cached, see _zone_floor_y)
 
 # --- GridMap cells ---------------------------------------------------------
 
@@ -256,7 +283,10 @@ func _resolve_mesh_items() -> void:
 	_item_ids.clear()
 	_depleted_ids.clear()
 	if world == null or world.mesh_library == null:
-		push_error("Builder: `world` (the GridMap) or its MeshLibrary is not set -- nothing can be built.")
+		push_error("Builder: `world` (the GridMap) is not set -- nothing can be built.")
+		return
+	else: if world.mesh_library == null:
+		push_error("Builder: the MeshLibrary of `world` is not set -- nothing can be built.")
 		return
 	_ground_item = _find_item(ground_item_name)
 	_construction_item = _find_item(construction_item_name, ground.mesh_library if ground != null else null)
@@ -368,52 +398,224 @@ func _ground_height_or_nan(pos: Vector3) -> float:
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	return hit.position.y if not hit.is_empty() else NAN
 
-# Moves the scene's StockpileMarker disc (a node in main.tscn) onto the stockpile point.
-func _place_stockpile_marker() -> void:
-	for pair in [[stockpile_marker, stockpile_position], [food_stockpile_marker, food_stockpile_position]]:
-		var marker := pair[0] as Node3D
-		var point: Vector3 = pair[1]
-		if marker == null:
-			continue
-		var ground_y := _ground_height_or_nan(point)
-		marker.global_position = Vector3(point.x, (0.0 if is_nan(ground_y) else ground_y) + 0.05, point.z)
-	print("Log stockpile at (%.1f, %.1f), %dx%d cells; food stockpile at (%.1f, %.1f), %dx%d cells" % [stockpile_position.x, stockpile_position.z, stockpile_size_cells, stockpile_size_cells, food_stockpile_position.x, food_stockpile_position.z, food_stockpile_size_cells, food_stockpile_size_cells])
+# --- Zones: what each tile is designated as ---------------------------------------------------------------------
+# Stockpiles, gathering areas and so on are DATA on the tiles (ZoneMap), painted in zone mode (Tab, then Z). The Zones
+# GridMap in main.tscn only draws it. Nothing is snapped to a block or sized by hand: a zone is the tiles you painted.
 
-# Both stockpiles (logs, food) are square blocks of grid cells: snap each centre to its block and remember which cells
-# they cover (never buildable)
-func _snap_stockpile_to_grid() -> void:
-	_stockpile_cells.clear()
+func _setup_zones() -> void:
+	# The Zones GridMap's position, cell size and cell scale are set by hand in the editor, so it looks in the game exactly
+	# as it does there. Tiles painted on it in the editor were only for lining it up: from here it shows the zone data.
+	if zone_overlay != null:
+		zone_overlay.clear()
+	zones.cell_changed.connect(_on_zone_cell_changed)
+	_apply_starting_zones()
+
+func _apply_starting_zones() -> void:
+	for entry in [[starting_log_zone, ZoneMap.Type.LOG_STOCKPILE], [starting_food_zone, ZoneMap.Type.FOOD_STOCKPILE]]:
+		var rect: Rect2i = entry[0]
+		for x in range(rect.position.x, rect.end.x):
+			for z in range(rect.position.y, rect.end.y):
+				var cell := Vector3i(x, build_layer, z)
+				if _is_land_cell(cell):
+					zones.set_type(cell, entry[1])
+
+# Draws a tile's zone on the overlay; a stockpile tile that stops being one lets its pile go (loose physics props again)
+func _on_zone_cell_changed(cell: Vector3i, old_type: int, new_type: int) -> void:
+	if zone_overlay != null and zone_overlay.mesh_library != null:
+		var item := GridMap.INVALID_CELL_ITEM
+		if new_type != ZoneMap.Type.NONE:
+			item = zone_overlay.mesh_library.find_item_by_name(ZoneMap.item_name(new_type))
+		zone_overlay.set_cell_item(cell, item)
+	if old_type == ZoneMap.Type.LOG_STOCKPILE or old_type == ZoneMap.Type.FOOD_STOCKPILE:
+		_release_cell_pile(cell)
+
+func _release_cell_pile(cell: Vector3i) -> void:
+	var pile: Array = _cell_piles.get(cell, [])
+	_cell_piles.erase(cell)
+	for prop in pile:
+		if prop != null and is_instance_valid(prop):
+			prop.unpile()
+
+# Ground height under a zone tile (piles sit on it): a downward probe, cached once the ground collision answers
+func _zone_floor_y(cell: Vector3i) -> float:
+	if _zone_floor.has(cell):
+		return _zone_floor[cell]
+	var centre := cell_to_world(cell)
+	var ground_y := _ground_height_or_nan(centre)
+	if is_nan(ground_y):
+		return centre.y
+	_zone_floor[cell] = ground_y + 0.05
+	return ground_y + 0.05
+
+# The zone under a world position (height ignored)
+func zone_at(pos: Vector3) -> int:
 	if world == null:
-		return
-	if food_stockpile_position == Vector3.ZERO:
-		food_stockpile_position = stockpile_position + Vector3(world.cell_size.x * (maxi(stockpile_size_cells, 1) + 2), 0.0, 0.0)
-	stockpile_position = _snap_block(stockpile_position, stockpile_size_cells)
-	food_stockpile_position = _snap_block(food_stockpile_position, food_stockpile_size_cells)
+		return ZoneMap.Type.NONE
+	return zones.get_type(world_to_cell(pos))
 
-func _snap_block(point: Vector3, size_cells: int) -> Vector3:
-	var n := maxi(size_cells, 1)
-	# Centre the block ON the assigned point (not grow it down-right from the cell under it): the cell containing
-	# (point - half the block's extent beyond one cell) is the block's first cell.
-	var origin := world_to_cell(point - Vector3((n - 1) * 0.5 * world.cell_size.x, 0.0, (n - 1) * 0.5 * world.cell_size.z))
-	for dx in n:
-		for dz in n:
-			_stockpile_cells[Vector3i(origin.x + dx, origin.y, origin.z + dz)] = true
-	var centre := cell_to_world(origin)
-	return Vector3(centre.x + (n - 1) * 0.5 * world.cell_size.x, 0.0, centre.z + (n - 1) * 0.5 * world.cell_size.z)
-
-# True if a world position is over the log stockpile block (wood is counted live from the logs lying in it)
+# True if a world position is over a log stockpile tile (wood is counted live from the logs lying on those tiles)
 func is_in_stockpile(pos: Vector3) -> bool:
-	return _in_block(pos, stockpile_position, stockpile_size_cells)
+	return zone_at(pos) == ZoneMap.Type.LOG_STOCKPILE
 
-# True if a world position is over the food stockpile block (food = the fruit lying in it)
+# True if a world position is over a food stockpile tile (food = the fruit lying on those tiles)
 func is_in_food_stockpile(pos: Vector3) -> bool:
-	return _in_block(pos, food_stockpile_position, food_stockpile_size_cells)
+	return zone_at(pos) == ZoneMap.Type.FOOD_STOCKPILE
 
-func _in_block(pos: Vector3, centre: Vector3, size_cells: int) -> bool:
+# The zone a resource type is stored in
+func zone_for_resource(resource_type: String) -> int:
+	return ZoneMap.Type.FOOD_STOCKPILE if resource_type == "food" else ZoneMap.Type.LOG_STOCKPILE
+
+# Centre of the tile of `zone` nearest to `from` (flat distance); `from` itself while nothing is zoned that way yet
+func nearest_zone_point(zone: int, from: Vector3) -> Vector3:
+	var best := from
+	var best_distance := INF
+	for cell in zones.cells_of(zone):
+		var point := cell_to_world(cell)
+		var d := flat_distance(point, from)
+		if d < best_distance:
+			best_distance = d
+			best = point
+	return best
+
+# Flat distance from a position to the edge of the nearest tile of `zone` (0 = on it, INF = no such zone)
+func flat_distance_to_zone(zone: int, pos: Vector3) -> float:
 	if world == null:
-		return false
-	var half := maxi(size_cells, 1) * world.cell_size.x * 0.5
-	return absf(pos.x - centre.x) <= half and absf(pos.z - centre.z) <= half
+		return INF
+	var half := Vector2(world.cell_size.x, world.cell_size.z) * 0.5
+	var best := INF
+	for cell in zones.cells_of(zone):
+		var centre := cell_to_world(cell)
+		var off := Vector2(maxf(absf(pos.x - centre.x) - half.x, 0.0), maxf(absf(pos.z - centre.z) - half.y, 0.0))
+		best = minf(best, off.length())
+	return best
+
+# Why this tile can't take this zone ("" = it can)
+func _zone_block_reason(cell: Vector3i, zone: int) -> String:
+	if zone == ZoneMap.Type.NONE:
+		return ""
+	if not _is_land_cell(cell):
+		return "Zones can only go on land."
+	if ZoneMap.is_blocking(zone) and (_cell_ids.has(cell) or _site_cells.has(cell) or _object_in_cell(cell)):
+		return "Something is built there."
+	return ""
+
+# Server / offline: designates these tiles (clients ask through WorldSync.req_zones). Checks every tile again.
+func perform_paint_zones(cells: Array, zone: int) -> void:
+	if not ZoneMap.is_valid(zone):
+		return
+	var applied: Array = []
+	for cell in cells:
+		if not cell is Vector3i:
+			continue
+		var c: Vector3i = cell
+		if c.y != build_layer or _zone_block_reason(c, zone) != "":
+			continue
+		if zones.set_type(c, zone):
+			applied.append(c)
+	if not applied.is_empty():
+		_net("zones", [applied, zone])
+
+# Client side of "zones" (the server already checked them)
+func apply_zones(cells: Array, zone: int) -> void:
+	for cell in cells:
+		zones.set_type(cell, zone)
+
+# For the save file (see SaveManager): tiles by zone NAME, never by enum number
+func restore_zones(cells: PackedVector3Array, names: PackedStringArray) -> void:
+	zones.clear()
+	for i in mini(cells.size(), names.size()):
+		var type := ZoneMap.type_from_item(names[i])
+		if type != ZoneMap.Type.NONE:
+			zones.set_type(Vector3i(roundi(cells[i].x), roundi(cells[i].y), roundi(cells[i].z)), type)
+	for type in ZoneMap.BRUSHES:
+		if type != ZoneMap.Type.NONE and zones.has_any(type):
+			var plain: Array = []
+			plain.append_array(zones.cells_of(type))
+			_net("zones", [plain, type]) # tells connected clients what the loaded world looks like
+
+# --- Zone mode (Tab, then Z): paint tiles with a brush ---------------------------------------------------------------
+
+func _set_zone_mode(on: bool) -> void:
+	if zone_mode == on:
+		return
+	zone_mode = on
+	_zone_last_cell = null
+	_last_info_text = "" # make the HUD label rebuild its text
+	if preview != null:
+		preview.visible = not on # no building ghost while painting
+	if selector != null:
+		selector.visible = interact_mode and not delete_mode
+	if not on:
+		build_hint_timer = 0.0
+		if build_hint_label != null:
+			build_hint_label.visible = false
+
+# Number keys pick the brush (1, 2, 3... in ZoneMap.BRUSHES order)
+func _zone_select_brush() -> void:
+	for i in ZoneMap.BRUSHES.size():
+		if Input.is_action_just_pressed("selection_%d" % i):
+			zone_brush = ZoneMap.BRUSHES[i]
+			Audio.play("sounds/toggle.ogg", -30)
+
+# The cursor follows the tile under the mouse; while the build button is held it paints that tile and every tile the mouse
+# crossed since the last frame
+func _zone_paint_step(delta: float) -> void:
+	var picked = pick_world_position(Globals.aim_position())
+	if picked == null:
+		return
+	var cell := world_to_cell(picked)
+	selector.global_position = selector.global_position.lerp(cell_to_world(cell), minf(delta * 40.0, 1.0))
+	var reason := _zone_block_reason(cell, zone_brush)
+	_update_zone_cursor(reason == "")
+	if not Input.is_action_pressed("build"):
+		_zone_last_cell = null
+		return
+	if _zone_last_cell != null and _zone_last_cell == cell:
+		return # still on the tile that was just painted
+	var stroke: Array = [cell]
+	if _zone_last_cell != null:
+		stroke = _cells_between(_zone_last_cell, cell)
+	else:
+		Audio.play(SFX_PLACE, -28)
+		if reason != "":
+			_flash_build_hint(reason)
+	_zone_last_cell = cell
+	var fresh: Array = []
+	for c in stroke:
+		if zones.get_type(c) != zone_brush:
+			fresh.append(c)
+	if fresh.is_empty():
+		return
+	if Globals.online_client:
+		Globals.world_sync.req_zones(fresh, zone_brush)
+	else:
+		perform_paint_zones(fresh, zone_brush)
+
+# The tiles on the straight line from a (exclusive) to b (inclusive), so a fast drag leaves no gaps
+func _cells_between(a: Vector3i, b: Vector3i) -> Array:
+	var out: Array = []
+	var steps := maxi(absi(b.x - a.x), absi(b.z - a.z))
+	for i in range(1, steps + 1):
+		var t := float(i) / steps
+		out.append(Vector3i(roundi(lerpf(a.x, b.x, t)), build_layer, roundi(lerpf(a.z, b.z, t))))
+	if out.is_empty():
+		out.append(b)
+	return out
+
+# Tile outline tinted with the brush's colour, red where the brush can't paint
+func _update_zone_cursor(can_paint: bool) -> void:
+	if cursor_sprite == null:
+		return
+	cursor_sprite.visible = true
+	var tint := ZoneMap.color(zone_brush)
+	cursor_sprite.modulate = Color(tint.r, tint.g, tint.b, 0.95) if can_paint else Color(1.0, 0.4, 0.35, 0.9)
+
+func _zone_hud_text() -> String:
+	var parts: Array[String] = []
+	for i in ZoneMap.BRUSHES.size():
+		var type: int = ZoneMap.BRUSHES[i]
+		parts.append("%s[%d] %s" % [">" if type == zone_brush else "", (i + 1) % 10, ZoneMap.label(type)])
+	return "ZONE MODE - click or drag to paint tiles\n" + "    ".join(parts) + "\n[B] back to building    [Tab] leave interact mode"
 
 func _generate_id() -> String:
 	_id_counter += 1
@@ -425,11 +627,16 @@ func _process(delta):
 	action_interact_mode() # Tab: toggle interact mode (the build cursor)
 	action_delete_mode() # Backspace: delete mode (from interact mode)
 	action_rotate() # Rotates selection 90 degrees
-	action_structure_toggle() # Toggles between structures
+	if zone_mode:
+		_zone_select_brush() # 1-5 pick the zone brush
+	else:
+		action_structure_toggle() # Toggles between structures
 
 	# Only show selector and process building in building mode (interact mode, not deleting). The cursor snaps to the cell
 	# the mouse is over.
-	if interact_mode and not delete_mode and world != null:
+	if interact_mode and zone_mode and world != null:
+		_zone_paint_step(delta)
+	elif interact_mode and not delete_mode and world != null:
 		var picked = pick_world_position(Globals.aim_position())
 		if picked != null:
 			var world_position: Vector3 = _clamp_to_build_range(picked)
@@ -444,6 +651,7 @@ func _process(delta):
 	_decay_demolish(delta)
 	_update_progress_bar_visibility()
 	_refresh_live_counts(delta)
+	_regrow_tick(delta)
 	_update_hud()
 
 	if delete_mode and build_hint_label != null:
@@ -545,7 +753,8 @@ func _plant_object(structure: Structure, pos: Vector3, node_name: String = "", y
 		placed_structures[_object_ids[node]]["position"] = node.global_position
 	return node
 
-# What an object leaves behind when it is used up (Gatherable.depleted_scene: a tree's stump), in the same spot
+# What an object leaves behind when it is used up (Gatherable.depleted_scene: a tree's stump), in the same spot.
+# A felled tree's stump grows a new tree after tree_regrow_days; a trampled bush stays trampled.
 func _leave_depleted_model(node: Node3D) -> void:
 	var gatherable := node as Gatherable
 	if gatherable == null or gatherable.depleted_scene == null or not node.is_inside_tree():
@@ -556,6 +765,92 @@ func _leave_depleted_model(node: Node3D) -> void:
 	var parent := node.get_parent()
 	parent.add_child(leftover)
 	leftover.global_transform = node.global_transform
+	if gatherable.pick_fruit_only or tree_regrow_days <= 0.0 or node.scene_file_path == "":
+		return
+	var tree_name := String(node.name)
+	_stump_nodes[tree_name] = leftover
+	if not Globals.online_client: # the server decides when it grows back (clients are told, see WorldSync "regrow")
+		_stumps.append({
+			"name": tree_name,
+			"scene_path": node.scene_file_path,
+			"xform": node.global_transform,
+			"planted": node.has_meta("planted"),
+			"due_day": Globals.game_days() + tree_regrow_days,
+		})
+
+# --- Regrowth ---------------------------------------------------------------
+
+# Runs once a second on the server / offline. Time is counted in in-game days (Globals.game_days), not seconds.
+#  * a stump whose time is up grows a new tree of the kind that was felled (the same scene, spot, size and name)
+#  * every standing bush gets the days that passed, and grows its fruit back one by one (Gatherable.regrow_fruit)
+func _regrow_tick(delta: float) -> void:
+	if Globals.online_client or Globals.day_night == null:
+		return
+	_regrow_timer -= delta
+	if _regrow_timer > 0.0:
+		return
+	_regrow_timer = REGROW_CHECK_INTERVAL
+	var now := Globals.game_days()
+	var days_passed := 0.0 if _last_regrow_day < 0.0 else maxf(now - _last_regrow_day, 0.0)
+	_last_regrow_day = now
+
+	for i in range(_stumps.size() - 1, -1, -1):
+		var entry: Dictionary = _stumps[i]
+		if now < entry["due_day"]:
+			continue
+		var xform: Transform3D = entry["xform"]
+		if not _stump_is_clear(xform.origin):
+			continue # someone is standing on it: try again next check
+		_stumps.remove_at(i)
+		_regrow_tree(entry["name"], entry["scene_path"], xform, entry["planted"])
+		_net("regrow", [entry["name"], entry["scene_path"], xform, entry["planted"]])
+
+	if days_passed > 0.0:
+		for node in get_tree().get_nodes_in_group("gatherable"):
+			var bush := node as Gatherable
+			if bush != null and bush.pick_fruit_only:
+				bush.regrow_fruit(days_passed)
+
+# Nobody (player, online player, citizen) close enough to end up inside a trunk that appears here
+func _stump_is_clear(pos: Vector3) -> bool:
+	if Globals.player != null and flat_distance(Globals.player.global_position, pos) < REGROW_CLEARANCE:
+		return false
+	if Globals.network != null and Globals.network.net_players != null:
+		for avatar in Globals.network.net_players.get_children():
+			if avatar is NetPlayer and flat_distance(avatar.net_position, pos) < REGROW_CLEARANCE:
+				return false
+	for c in citizens:
+		if is_instance_valid(c) and flat_distance(c.global_position, pos) < REGROW_CLEARANCE:
+			return false
+	return true
+
+# Swaps a stump for the tree that was felled there. Same node name and parent as before, so the tree gets the same id on every peer.
+func _regrow_tree(tree_name: String, scene_path: String, xform: Transform3D, planted: bool) -> void:
+	var parent: Node = objects_root if objects_root != null else self
+	var stump: Node = _stump_nodes.get(tree_name)
+	_stump_nodes.erase(tree_name)
+	if stump != null and is_instance_valid(stump):
+		parent = stump.get_parent()
+		stump.queue_free()
+	if parent.get_node_or_null(NodePath(tree_name)) != null:
+		return # already standing (an event replayed to a client that had it)
+	var scene := load(scene_path) as PackedScene
+	var tree: Node3D = null
+	if scene != null:
+		tree = scene.instantiate() as Node3D
+	if tree == null:
+		return
+	if planted:
+		tree.set_meta("planted", true) # planted in-game: saved by its scene + position, same as before it was felled
+	tree.name = tree_name
+	parent.add_child(tree)
+	tree.global_transform = xform
+	# It registered itself in _ready(), before being moved: refresh its recorded position
+	if _object_ids.has(tree):
+		var id: String = _object_ids[tree]
+		placed_structures[id]["position"] = tree.global_position
+		placed_structures[id]["rotation_y"] = tree.global_rotation.y
+	felled_objects.erase(tree_name) # a hand-placed tree stands again: a save must not fell it
 
 # Removes a placed structure: its cell reverts to what was there before (or the ground tile,
 # or Structure.depleted_item_name), and any BuildingInstance tracking it is dropped.
@@ -669,8 +964,8 @@ func action_build(cell: Vector3i, world_position: Vector3):
 		if _cell_ids.has(cell):
 			_flash_build_hint("Something is already built there. Demolish it first.")
 			return
-		if _stockpile_cells.has(cell):
-			_flash_build_hint("That's the stockpile.")
+		if zones.blocks_building(cell):
+			_flash_build_hint("That tile is a %s zone." % ZoneMap.label(zones.get_type(cell)).to_lower())
 			return
 		if not _is_land_cell(cell):
 			_flash_build_hint("You can only build on land.")
@@ -822,7 +1117,7 @@ func _update_cursor(cell: Vector3i) -> void:
 		return
 	# Trees are planted at the mouse point, not on a tile
 	cursor_sprite.visible = structures[index].scene == null
-	var can_build := is_unlocked(index) and not _cell_ids.has(cell) and not _site_cells.has(cell) and not _stockpile_cells.has(cell) and not _object_in_cell(cell) and _is_land_cell(cell) and _within_build_range(cell_to_world(cell)) \
+	var can_build := is_unlocked(index) and not _cell_ids.has(cell) and not _site_cells.has(cell) and not zones.blocks_building(cell) and not _object_in_cell(cell) and _is_land_cell(cell) and _within_build_range(cell_to_world(cell)) \
 			and index < _item_ids.size() and _item_ids[index] != GridMap.INVALID_CELL_ITEM
 	cursor_sprite.modulate = Color(0.55, 1.0, 0.55, 0.9) if can_build else Color(1.0, 0.4, 0.35, 0.9)
 
@@ -849,28 +1144,38 @@ func on_prop_collected(prop: ResourceProp) -> void:
 # when that pile is full (the prop then just lies where it is).
 func claim_stack_slot(prop: ResourceProp) -> Variant:
 	var resource_type := String(prop.get_meta("resource_type", ""))
-	var pile: Array = _piles.get(resource_type, [])
-	_prune_pile(pile)
-	var slot := pile.find(null)
-	var is_new_slot := slot == -1
-	if is_new_slot:
-		slot = pile.size()
-	var slot_transform: Variant = _slot_transform(resource_type, slot)
-	if slot_transform == null:
-		_piles[resource_type] = pile
-		return null
-	if is_new_slot:
-		pile.append(prop)
-	else:
-		pile[slot] = prop
-	_piles[resource_type] = pile
-	return slot_transform
+	var cells: Array[Vector3i] = zones.cells_of(zone_for_resource(resource_type)).duplicate()
+	if cells.is_empty():
+		return null # nothing is zoned for this resource: it just lies where it is
+	# The tile the prop lies on first, then the nearest ones: a pile grows from where things are dropped off
+	var here := prop.global_position
+	cells.sort_custom(func(a: Vector3i, b: Vector3i) -> bool: return flat_distance(cell_to_world(a), here) < flat_distance(cell_to_world(b), here))
+	for cell in cells:
+		var pile: Array = _cell_piles.get(cell, [])
+		_prune_pile(pile, cell, resource_type)
+		var slot := pile.find(null)
+		var is_new_slot := slot == -1
+		if is_new_slot:
+			slot = pile.size()
+		var slot_transform: Variant = _slot_transform(resource_type, slot, cell)
+		if slot_transform == null:
+			_cell_piles[cell] = pile
+			continue # this tile's pile is full: try the next one
+		if is_new_slot:
+			pile.append(prop)
+		else:
+			pile[slot] = prop
+		_cell_piles[cell] = pile
+		return slot_transform
+	return null # every tile of the zone is full
 
 # Where slot `slot` of the pile for this resource type is (null = the pile has no such slot, it is full)
-func _slot_transform(resource_type: String, slot: int) -> Variant:
+func _slot_transform(resource_type: String, slot: int, cell: Vector3i) -> Variant:
 	if resource_type == "food":
-		return _food_slot_transform(slot)
-	var columns := maxi(stack_columns, 1)
+		return _food_slot_transform(slot, cell)
+	# Each zone tile holds its own pile, so the layout is sized to ONE tile: as many columns as fit across it
+	var cell_w := world.cell_size.x if world != null else 2.0
+	var columns := clampi(floori(cell_w / stack_spacing.x), 1, maxi(stack_columns, 1))
 	var base_rows := maxi(stack_rows, 1)
 	# One "triangle" = base_rows rows in the bottom layer, one fewer in each layer above, down to a single row.
 	var unit_size := 0
@@ -881,7 +1186,7 @@ func _slot_transform(resource_type: String, slot: int) -> Variant:
 	var in_unit := slot % unit_size
 	# Finished triangles are followed by a NEW one beside it (along z first, then along x), each built up from its own
 	# bottom layer. When the block has no room for another triangle the pile is full.
-	var block := maxi(stockpile_size_cells, 1) * (world.cell_size.x if world != null else 2.0)
+	var block := cell_w
 	var units_z := maxi(floori(block / (base_rows * stack_spacing.z)), 1)
 	var units_x := maxi(floori(block / (columns * stack_spacing.x)), 1)
 	if unit >= units_z * units_x:
@@ -899,22 +1204,23 @@ func _slot_transform(resource_type: String, slot: int) -> Variant:
 		(column - (columns - 1) * 0.5) * stack_spacing.x + (floori(float(unit) / units_z) - (units_x - 1) * 0.5) * columns * stack_spacing.x,
 		0.25 + layer * stack_spacing.y,
 		(row - (rows - 1) * 0.5) * stack_spacing.z + (unit % units_z - (units_z - 1) * 0.5) * base_rows * stack_spacing.z)
-	var base_y := stockpile_marker.global_position.y if stockpile_marker != null else stockpile_position.y
-	var origin := Vector3(stockpile_position.x, base_y, stockpile_position.z) + local
+	var centre := cell_to_world(cell)
+	var origin := Vector3(centre.x, _zone_floor_y(cell), centre.z) + local
 	var lying := Basis.from_euler(Vector3(deg_to_rad(stack_rotation_degrees.x), deg_to_rad(stack_rotation_degrees.y), deg_to_rad(stack_rotation_degrees.z)))
 	return Transform3D(lying, origin)
 
 # The fruit pyramid: a food_stack_base x food_stack_base square of fruit, then one fewer per side on every layer above,
 # each fruit resting in the gap between four below it (so it is centred and sits spacing * 0.82 higher).
-func _food_slot_transform(slot: int) -> Variant:
-	var base := maxi(food_stack_base, 1)
+func _food_slot_transform(slot: int, cell: Vector3i) -> Variant:
+	var cell_w := world.cell_size.x if world != null else 2.0
+	var base := clampi(floori(cell_w / food_stack_spacing), 1, maxi(food_stack_base, 1))
 	var unit_size := 0
 	for s in range(base, 0, -1):
 		unit_size += s * s
 	# A finished pyramid is followed by another one beside it, until the block has no room for more.
 	var unit := floori(float(slot) / unit_size)
 	var footprint := base * food_stack_spacing
-	var block := maxi(food_stockpile_size_cells, 1) * (world.cell_size.x if world != null else 2.0)
+	var block := cell_w
 	var per_side := maxi(floori(block / footprint), 1)
 	if unit >= per_side * per_side:
 		return null # every pyramid in the block is complete
@@ -931,30 +1237,25 @@ func _food_slot_transform(slot: int) -> Variant:
 		(column - (side - 1) * 0.5) * food_stack_spacing + (unit % per_side - (per_side - 1) * 0.5) * footprint,
 		food_stack_lift + layer * food_stack_spacing * 0.82,
 		(row - (side - 1) * 0.5) * food_stack_spacing + (floori(float(unit) / per_side) - (per_side - 1) * 0.5) * footprint)
-	var base_y := food_stockpile_marker.global_position.y if food_stockpile_marker != null else food_stockpile_position.y
-	return Transform3D(Basis.IDENTITY, Vector3(food_stockpile_position.x, base_y, food_stockpile_position.z) + local)
+	var centre := cell_to_world(cell)
+	return Transform3D(Basis.IDENTITY, Vector3(centre.x, _zone_floor_y(cell), centre.z) + local)
 
 # Forgets slots whose prop is gone, was used up, or stopped being a pile member, so they can be filled again
-func _prune_pile(pile: Array) -> void:
+func _prune_pile(pile: Array, cell: Vector3i, resource_type: String) -> void:
 	for i in pile.size():
 		var prop = pile[i]
 		if prop == null:
 			continue
-		if not is_instance_valid(prop) or prop.collected or not prop.in_pile or is_pile_displaced(prop):
+		if not is_instance_valid(prop) or prop.collected or not prop.in_pile or is_pile_displaced(prop, cell, i, resource_type):
 			pile[i] = null
 	while not pile.is_empty() and pile.back() == null:
 		pile.pop_back()
 
-# True if a prop that holds a slot has been knocked well away from it (a pile that tumbled). Props still flying to their
-# slot are not displaced.
-func is_pile_displaced(prop: ResourceProp) -> bool:
+# True if a prop that holds a slot has ended up well away from it. Props still flying to their slot are not displaced.
+func is_pile_displaced(prop: ResourceProp, cell: Vector3i, slot: int, resource_type: String) -> bool:
 	if not prop.in_pile or not prop.has_arrived():
 		return false
-	var resource_type := String(prop.get_meta("resource_type", ""))
-	var slot := (_piles.get(resource_type, []) as Array).find(prop)
-	if slot == -1:
-		return true # holds no slot after all
-	var slot_transform: Variant = _slot_transform(resource_type, slot)
+	var slot_transform: Variant = _slot_transform(resource_type, slot, cell)
 	if slot_transform == null:
 		return true
 	var tolerance := 0.45 * (food_stack_spacing if resource_type == "food" else minf(stack_spacing.y, stack_spacing.z))
@@ -962,26 +1263,28 @@ func is_pile_displaced(prop: ResourceProp) -> bool:
 
 # Frees a prop's slot on its pile (it was used up, grabbed or knocked off)
 func release_stack_slot(prop: ResourceProp) -> void:
-	var pile: Array = _piles.get(String(prop.get_meta("resource_type", "")), [])
-	var slot := pile.find(prop)
-	if slot != -1:
+	for cell in _cell_piles:
+		var pile: Array = _cell_piles[cell]
+		var slot := pile.find(prop)
+		if slot == -1:
+			continue
 		pile[slot] = null
-	while not pile.is_empty() and pile.back() == null:
-		pile.pop_back()
+		while not pile.is_empty() and pile.back() == null:
+			pile.pop_back()
+		return
 
 func is_piled_type(resource_type: String) -> bool:
 	return piled_resource_types.has(resource_type)
 
 # True if a world position is over the stockpile block this resource type piles up in
 func is_in_pile_block(resource_type: String, pos: Vector3) -> bool:
-	return is_in_food_stockpile(pos) if resource_type == "food" else is_in_stockpile(pos)
+	return zone_at(pos) == zone_for_resource(resource_type)
 
 # --- Live stockpile contents ---------------------------------------------------
 # There is no stored counter. Wood is the logs lying settled in the log stockpile right now, food is the fruit lying
 # settled in the food stockpile. map.stockpile is only a short-lived copy of that, refreshed a few times a second.
 
 func _stock_props(resource_type: String) -> Array[ResourceProp]:
-	var in_food := resource_type == "food"
 	var found: Array[ResourceProp] = []
 	for node in get_tree().get_nodes_in_group("resource_prop"):
 		var prop := node as ResourceProp
@@ -990,7 +1293,7 @@ func _stock_props(resource_type: String) -> Array[ResourceProp]:
 		if String(prop.get_meta("resource_type", "")) != resource_type:
 			continue
 		var pos := prop.global_position
-		if (is_in_food_stockpile(pos) if in_food else is_in_stockpile(pos)):
+		if zone_at(pos) == zone_for_resource(resource_type):
 			found.append(prop)
 	return found
 
@@ -1052,17 +1355,16 @@ func absorb_prop(prop: ResourceProp) -> void:
 func eat_held_prop(prop: ResourceProp) -> float:
 	_net("prop_consume", [String(prop.name)])
 	prop.consume()
-	return food_energy
+	return food_hunger
 
 func has_food() -> bool:
 	return int(map.stockpile.get("food", 0)) > 0
 
-# True if a world position is close enough to the food stockpile block to eat from it (height ignored)
+# True if a world position is within eating reach of a food stockpile tile (height ignored)
 func is_at_food_store(pos: Vector3) -> bool:
-	var half := maxi(food_stockpile_size_cells, 1) * (world.cell_size.x if world != null else 1.0) * 0.5
-	return Vector2(pos.x - food_stockpile_position.x, pos.z - food_stockpile_position.z).length() <= half + eat_reach
+	return flat_distance_to_zone(ZoneMap.Type.FOOD_STOCKPILE, pos) <= eat_reach
 
-# Eats one real fruit lying in the food stockpile and returns the energy it restores (0.0 = nothing to eat). The
+# Eats one real fruit lying in the food stockpile and returns the hunger it restores (0.0 = nothing to eat). The
 # server / an offline game only: a client's count is a copy of the server's.
 func take_food() -> float:
 	if Globals.online_client or not has_food():
@@ -1078,9 +1380,8 @@ func take_food() -> float:
 	if popup_scene != null and DisplayServer.get_name() != "headless":
 		var popup: PickupPopup = popup_scene.instantiate()
 		add_child(popup)
-		var base_y := food_stockpile_marker.global_position.y if food_stockpile_marker != null else food_stockpile_position.y
-		popup.pop(Vector3(food_stockpile_position.x, base_y + 1.5, food_stockpile_position.z), "-1 Food")
-	return food_energy
+		popup.pop(prop.global_position + Vector3(0.0, 1.5, 0.0), "-1 Food")
+	return food_hunger
 
 # Land = the ground map has a tile under the build cell (empty cells are open sea)
 func _is_land_cell(cell: Vector3i) -> bool:
@@ -1130,7 +1431,7 @@ func perform_build(structure_index: int, cell: Vector3i, rotation_y: float, worl
 		_plant_object(structure, world_position, planted_name, yaw)
 		_net("plant", [structure_index, world_position, yaw, planted_name])
 		return
-	if _cell_ids.has(cell) or _site_cells.has(cell) or _stockpile_cells.has(cell) or _object_in_cell(cell) or not _is_land_cell(cell):
+	if _cell_ids.has(cell) or _site_cells.has(cell) or zones.blocks_building(cell) or _object_in_cell(cell) or not _is_land_cell(cell):
 		return
 	if structure_index >= _item_ids.size() or _item_ids[structure_index] == GridMap.INVALID_CELL_ITEM:
 		return
@@ -1181,6 +1482,7 @@ func action_interact_mode():
 	if InputMap.has_action("interact_mode") and Input.is_action_just_pressed("interact_mode"):
 		interact_mode = !interact_mode
 		_set_delete_mode(false)
+		_set_zone_mode(false)
 		selector.visible = interact_mode
 		if Audio:
 			Audio.play("sounds/toggle.ogg", -30)
@@ -1194,16 +1496,26 @@ func action_delete_mode():
 			Audio.play("sounds/toggle.ogg", -30)
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if delete_mode and event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_B:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	var key: int = event.physical_keycode
+	if key == KEY_B and (delete_mode or zone_mode):
 		_set_delete_mode(false)
-		if Audio:
-			Audio.play("sounds/toggle.ogg", -30)
-		get_viewport().set_input_as_handled()
+		_set_zone_mode(false)
+	elif key == KEY_Z and interact_mode and not delete_mode:
+		_set_zone_mode(not zone_mode)
+	else:
+		return
+	if Audio:
+		Audio.play("sounds/toggle.ogg", -30)
+	get_viewport().set_input_as_handled()
 
 func _set_delete_mode(on: bool) -> void:
 	if delete_mode == on:
 		return
 	delete_mode = on
+	if on:
+		_set_zone_mode(false) # deleting and painting zones are different modes
 	if selector != null:
 		selector.visible = interact_mode and not delete_mode # no placement ghost while deleting
 	if not on:
@@ -1281,6 +1593,13 @@ func _reserved_resources() -> Dictionary:
 func _update_hud() -> void:
 	# (No stockpile counters any more: wood and food are whatever is physically lying in the two stockpiles.)
 	if build_info_label == null:
+		return
+	if zone_mode:
+		build_info_label.visible = interact_mode
+		var zone_text := _zone_hud_text()
+		if zone_text != _last_info_text:
+			_last_info_text = zone_text
+			build_info_label.text = zone_text
 		return
 	build_info_label.visible = interact_mode and not structures.is_empty()
 	if build_info_label.visible:
@@ -1418,7 +1737,6 @@ func restore_citizen(info: Dictionary) -> void:
 	d.id = String(info.get("id", d.id))
 	d.citizen_name = String(info.get("name", d.citizen_name))
 	d.age = int(info.get("age", d.age))
-	d.energy = float(info.get("energy", d.energy))
 	d.job = String(info.get("job", ""))
 	d.job_task = int(info.get("job_task", Structure.JobTask.NONE))
 	d.workplace_id = String(info.get("workplace_id", ""))
@@ -1430,7 +1748,8 @@ func restore_citizen(info: Dictionary) -> void:
 	add_child(c)
 	c.global_position = info.get("position", Vector3.ZERO)
 	c.health = float(info.get("health", c.health))
-	c.energy = float(info.get("body_energy", c.energy))
+	c.energy = float(info.get("energy", c.energy))
+	c.hunger = float(info.get("hunger", c.hunger))
 	citizens.append(c)
 
 func spawn_citizens(count: int):
@@ -1443,8 +1762,71 @@ func spawn_citizens(count: int):
 		c.global_position = _citizen_spawn_position()
 		citizens.append(c)
 
+# A citizen who has stayed healthy and well fed long enough (see Citizen._update_reproduction) may have a child. The odds are
+# birth_chance times a random factor, so how likely it is varies from one try to the next. The baby is a new citizen next to the parent.
+func try_birth(parent: Node3D) -> bool:
+	if Globals.online_client or citizen_scene == null or not is_instance_valid(parent):
+		return false
+	if randf() >= clampf(birth_chance * randf_range(0.5, 1.5), 0.0, 1.0):
+		return false
+	var baby = citizen_scene.instantiate()
+	_citizen_counter += 1
+	baby.name = "Citizen_%d" % _citizen_counter # the MultiplayerSpawner replicates this exact name to clients
+	var d := CitizenData.new()
+	d.age = 0
+	baby.data = d # before add_child: Citizen._ready only makes its own data when there is none
+	add_child(baby)
+	var offset := Vector2.from_angle(randf() * TAU) * 1.2
+	baby.global_position = parent.global_position + Vector3(offset.x, 0.3, offset.y)
+	citizens.append(baby)
+	return true
+
+# --- Night and shelter ------------------------------------------------------
+
+## True from night_starts to night_ends (the day wraps at midnight). Always false without a day/night cycle.
+func is_night() -> bool:
+	if Globals.day_night == null:
+		return false
+	var t: float = Globals.day_night.time_of_day
+	return t >= night_starts or t < night_ends
+
+## Every shelter there is: each placed HOUSE, the huts the settlement starts with included.
+func shelter_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for id in buildings.keys():
+		var instance: BuildingInstance = buildings[id]
+		if instance.structure_index >= 0 and instance.structure_index < structures.size() \
+				and structures[instance.structure_index].type == Structure.Type.HOUSE:
+			ids.append(id)
+	return ids
+
+## The shelter a citizen sleeps in tonight: the home they were assigned if they have one, otherwise a random shelter.
+## NO_ID if the settlement has no shelter at all.
+func pick_shelter(citizen_id: String) -> String:
+	var all := shelter_ids()
+	if all.is_empty():
+		return NO_ID
+	for id in all:
+		if citizen_id in (buildings[id] as BuildingInstance).residents:
+			return id
+	return all[randi() % all.size()]
+
+## True if `pos` is within shelter_reach of any shelter (height ignored)
+func is_near_shelter(pos: Vector3) -> bool:
+	for id in shelter_ids():
+		if flat_distance(pos, get_structure_position(id)) <= shelter_reach:
+			return true
+	return false
+
 const CITIZEN_SPAWN_RADIUS := 20.0 # metres around the player's spawn point
 const CITIZEN_SPAWN_TRIES := 40
+const CITIZEN_SPAWN_GAP := 1.5 # metres a new citizen keeps from the ones already there (stacked capsules shove each other away)
+
+func _too_close_to_citizen(pos: Vector3) -> bool:
+	for other in citizens:
+		if is_instance_valid(other) and flat_distance(other.global_position, pos) < CITIZEN_SPAWN_GAP:
+			return true
+	return false
 
 ## A random spot on land within CITIZEN_SPAWN_RADIUS of the player's spawn point (the spawn point itself if none is found).
 func _citizen_spawn_position() -> Vector3:
@@ -1452,6 +1834,8 @@ func _citizen_spawn_position() -> Vector3:
 	for i in CITIZEN_SPAWN_TRIES:
 		var offset := Vector2.from_angle(randf() * TAU) * sqrt(randf()) * CITIZEN_SPAWN_RADIUS
 		var pos := origin + Vector3(offset.x, 0.0, offset.y)
+		if _too_close_to_citizen(pos):
+			continue
 		var ground_y := _ground_height_or_nan(pos)
 		if is_nan(ground_y):
 			continue # nothing to stand on (open sea)
@@ -1962,18 +2346,18 @@ func clear_gather_progress(id: String) -> void:
 
 func add_chop_progress(id: String, amount: float, picking := false) -> Dictionary:
 	if Globals.online_client:
-		# The server does the chopping: send it what we put in; the result (tree gone, energy bonus) comes back
+		# The server does the chopping: send it what we put in; the result (tree gone, hunger bonus) comes back
 		if placed_structures.has(id):
 			Globals.world_sync.client_chop(id, amount)
-		return {"completed": false, "energy_bonus": 0.0}
+		return {"completed": false, "hunger_bonus": 0.0}
 	if not placed_structures.has(id):
-		return {"completed": false, "energy_bonus": 0.0}
+		return {"completed": false, "hunger_bonus": 0.0}
 	var structure_index: int = placed_structures[id]["structure_index"]
 	if structure_index < 0 or structure_index >= structures.size():
-		return {"completed": false, "energy_bonus": 0.0}
+		return {"completed": false, "hunger_bonus": 0.0}
 	var structure = structures[structure_index]
 	if not structure.gatherable:
-		return {"completed": false, "energy_bonus": 0.0}
+		return {"completed": false, "hunger_bonus": 0.0}
 
 	# A bush isn't chopped by citizens: each full gather_time of work (picking = true) picks ONE fruit, no progress bar, and the
 	# bush stays. The player (picking = false) chops it down like a tree.
@@ -1982,10 +2366,10 @@ func add_chop_progress(id: String, amount: float, picking := false) -> Dictionar
 		var picked: float = gather_progress.get(id, 0.0) + amount
 		if picked < 1.0:
 			gather_progress[id] = picked
-			return {"completed": false, "energy_bonus": 0.0}
+			return {"completed": false, "hunger_bonus": 0.0}
 		gather_progress.erase(id)
 		pick_bush_fruit(bush)
-		return {"completed": true, "energy_bonus": 0.0}
+		return {"completed": true, "hunger_bonus": 0.0}
 
 	var previous_progress: float = gather_progress.get(id, 0.0)
 	var progress = clamp(previous_progress + amount, 0.0, 1.0)
@@ -1997,12 +2381,12 @@ func add_chop_progress(id: String, amount: float, picking := false) -> Dictionar
 	_spawn_incremental_resource_props(id, structure, previous_progress, progress)
 
 	if progress >= 1.0:
-		var energy_bonus := 0.0
+		var hunger_bonus := 0.0
 		if randf() < structure.food_chance:
-			energy_bonus = structure.food_energy_bonus
+			hunger_bonus = structure.food_hunger_bonus
 		gather_resource_at(id)
-		return {"completed": true, "energy_bonus": energy_bonus}
-	return {"completed": false, "energy_bonus": 0.0}
+		return {"completed": true, "hunger_bonus": hunger_bonus}
+	return {"completed": false, "hunger_bonus": 0.0}
 
 # What one tree drops, rolled the first time it is chopped and kept until it is gone (a fruit tree: 1-2 logs and a few fruit)
 func _get_rolled_yields(id: String, structure: Structure) -> Dictionary:

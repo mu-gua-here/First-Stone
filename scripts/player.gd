@@ -75,20 +75,18 @@ func _physics_process(delta: float) -> void:
 	
 	# (gravity / sinking is applied at the top by _apply_gravity())
 	
-	# ENERGY MECHANICS
+	# VITALS (hunger and energy: see carrier.gd)
 	
-	# Tiredness AND injury slow movement and weaken jumps. The two multipliers stack, so low health and
-	# low energy together slow the player far more than either alone.
-	var energy_mult := clampf(smoothstep(0.0, 1.0, energy / maxf(slow_below_energy, 0.001)), 0.2, 1.0)
-	var health_mult := clampf(smoothstep(0.0, 1.0, health / maxf(slow_below_health, 0.001)), 0.2, 1.0)
-	var vitality_mult := energy_mult * health_mult
+	# Injury, hunger AND tiredness slow movement and weaken jumps. The three multipliers stack, so being hurt, starving and
+	# worn out together slow the player far more than any one alone.
+	var vitality_mult := _vitality_mult()
 	
 	# Jump (solid ground only -- swimming is handled by the swim_up/swim_down axis below)
 	var just_jumped := false
 	if energy > 0.0:
 		if Input.is_action_just_pressed("player_jump") and not in_fluid and (is_on_floor() or bounce_active):
-			velocity.y = JUMP_HEIGHT * vitality_mult
-			energy -= JUMP_HEIGHT * 0.01
+			velocity.y = JUMP_HEIGHT * vitality_mult * 0.5 * (2 - int(_holding_log()))
+			energy -= jump_energy
 			bounce_active = false
 			just_jumped = true
 			_jumping = true
@@ -119,7 +117,7 @@ func _physics_process(delta: float) -> void:
 	
 	# Horizontal movement steers toward the wanted velocity (see Carrier.steer_horizontal) instead of
 	# piling onto velocity, so outside impacts can be steered against and decay normally.
-	var wanted := Vector3(direction.x, 0.0, direction.z) * speed * (vitality_mult if dev_mode else 1.0)
+	var wanted := Vector3(direction.x, 0.0, direction.z) * speed * (vitality_mult if dev_mode else _carry_speed_mult()) # (a log in your arms slows you down)
 
 	if dev_mode:
 		# Free-fly: ease straight toward the wanted 3D velocity
@@ -129,20 +127,11 @@ func _physics_process(delta: float) -> void:
 		steer_horizontal(wanted, delta)
 		
 		if wanted.length() > 0.0:
-			# Subtract energy when movement is done
-			if in_fluid: energy -= move_energy * delta
-			else: energy -= swim_energy * delta
+			_spend_travel_energy(delta, in_fluid) # walking tires you out, swimming more so
 	
-	# Heal player if not at max health
-	if health < 100.0 and energy > 30.0:
-		health += heal_rate * delta
-		energy -= heal_energy * delta
-	
-	energy -= metabolism * delta
-	
-	# Start eating away at health once at critical levels
-	if energy < 30.0:
-		health -= hunger_dmg * delta
+	# Standing still beside a shelter is resting: that (and only that) is how energy comes back
+	is_resting = builder != null and not dev_mode and input_dir == Vector2.ZERO and builder.is_near_shelter(global_position)
+	_tick_vitals(delta) # hunger burns, healing costs hunger, starving / exhaustion hurt, resting recharges energy (carrier.gd)
 	
 	if in_fluid:
 		# Scaled by vertical/horizontal drag so top swim speed is unchanged now that vertical drag is weaker.
@@ -186,7 +175,7 @@ func _physics_process(delta: float) -> void:
 	_update_eating(delta)
 
 # --- Eating ---
-# Standing at the stockpile while hungry (energy below Builder.hungry_below) eats its food one bite at a time, until
+# Standing at the stockpile while hungry (hunger below Builder.hungry_below) eats its food one bite at a time, until
 # Builder.eat_until. Only offline / on the host for now: an online client's stockpile is a copy of the server's, so
 # eating there needs a request to the server (like req_build).
 const EAT_BITE_INTERVAL := 0.8
@@ -199,13 +188,13 @@ func _update_eating(delta: float) -> void:
 	_eat_bite_timer -= delta
 	if _eat_bite_timer > 0.0:
 		return
-	var hungry:bool = energy < (builder.eat_until if _is_eating else builder.hungry_below)
+	var hungry:bool = hunger < (builder.eat_until if _is_eating else builder.hungry_below)
 	if not hungry or not builder.has_food() or not builder.is_at_food_store(global_position):
 		_is_eating = false
 		return
 	_is_eating = true
 	_eat_bite_timer = EAT_BITE_INTERVAL
-	energy += builder.take_food()
+	hunger += builder.take_food()
 
 # Called by attackers (e.g. angry citizens). Ignored while invulnerable.
 func take_damage(amount: float, source_position: Vector3 = global_position, knockback_force: float = 4.0) -> void:
@@ -226,6 +215,7 @@ func _on_death() -> void:
 	velocity = Vector3.ZERO
 	knockback = Vector3.ZERO
 	health = max_health
+	hunger = max_hunger
 	energy = max_energy
 	is_dead = false
 	
@@ -245,17 +235,20 @@ func _update_grab() -> void:
 			_held_props.remove_at(i) # collected / gone: the stack closes up
 	var carry_forward := Vector3.FORWARD.rotated(Vector3.UP, view_node.rotation.y) if view_node != null else Vector3.FORWARD # carried in front of the player (the way the camera looks)
 	for i in _held_props.size():
-		(_held_props[i] as ResourceProp).carry_to(global_position + ResourceProp.carry_offset(i, carry_forward))
+		(_held_props[i] as ResourceProp).carry_to(global_position + ResourceProp.carry_offset(i, carry_forward), carry_forward)
 	_eat_held_fruit()
 	if Input.is_action_just_pressed("drop") and not _held_props.is_empty():
 		var top := _held_props.pop_back() as ResourceProp
 		top.release(Vector3(velocity.x, 0.0, velocity.z))
-	var full := _held_props.size() >= ResourceProp.MAX_CARRY or _holding_log() # a log fills your arms
-	var nearest: ResourceProp = null if full else _nearest_grabbable(false)
+	var full := _held_props.size() >= ResourceProp.MAX_CARRY or _holding_log() # no room for fruit (a log fills your arms)
+	var nearest: ResourceProp = _nearest_grabbable(false) # null when the hands have no room for anything nearby
 	var bush: Gatherable = null if full else builder.nearest_pickable_bush(global_position, BUSH_PICK_REACH)
 	var drop_hint := ("   [Q] Drop" + ("   [F] Eat" if _holding_food() else "")) if not _held_props.is_empty() else ""
 	if nearest != null:
-		_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
+		if nearest.is_log():
+			_set_grab_hint("[E] Grab log%s" % drop_hint)
+		else:
+			_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
 		if Input.is_action_just_pressed("grab"):
 			nearest.grab()
 			_held_props.append(nearest)
@@ -267,7 +260,9 @@ func _update_grab() -> void:
 				fruit.grab()
 				_held_props.append(fruit)
 	elif not _held_props.is_empty():
-		if full:
+		if _holding_log():
+			_set_grab_hint("Carrying a log - [Q] Drop")
+		elif full:
 			_set_grab_hint("Hands full (%d/%d) - [Q] Drop" % [_held_props.size(), ResourceProp.MAX_CARRY])
 		else:
 			_set_grab_hint("[Q] Drop (%d/%d)" % [_held_props.size(), ResourceProp.MAX_CARRY])
@@ -279,7 +274,7 @@ const EAT_HELD_KEY := KEY_F
 var _eat_held_timer := 0.0
 
 func _eat_held_fruit() -> void:
-	if not Input.is_key_pressed(EAT_HELD_KEY) or Globals.online_client or dev_mode or energy >= 100.0:
+	if not Input.is_key_pressed(EAT_HELD_KEY) or Globals.online_client or dev_mode or hunger >= 100.0:
 		_eat_held_timer = 0.0
 		return
 	_eat_held_timer -= get_physics_process_delta_time()
@@ -290,7 +285,7 @@ func _eat_held_fruit() -> void:
 		if is_instance_valid(held_prop) and String(held_prop.get_meta("resource_type", "")) == "food":
 			_eat_held_timer = EAT_BITE_INTERVAL
 			_held_props.remove_at(i)
-			energy += builder.eat_held_prop(held_prop)
+			hunger += builder.eat_held_prop(held_prop)
 			return
 
 func _holding_food() -> bool:
@@ -300,16 +295,33 @@ func _holding_food() -> bool:
 	return false
 
 func _holding_log() -> bool:
-	for held_prop in _held_props:
-		if is_instance_valid(held_prop) and builder.is_stacked_type(String(held_prop.get_meta("resource_type", ""))):
+	for held_prop in _carried_props(Globals.online_client):
+		if is_instance_valid(held_prop) and (held_prop as ResourceProp).is_log():
 			return true
 	return false
 
-## The closest prop within GRAB_REACH that can be picked up: small ones (fruit) and logs lying on the stockpile (loose logs are big enough to push, so they are skipped).
+## What is in the arms: the ResourceProps themselves offline / on the host, or (online client) the ones the server let us pick up, looked up by name
+func _carried_props(is_client: bool) -> Array:
+	if not is_client:
+		return _held_props
+	var props: Array = []
+	for prop_name in _held_prop_names:
+		var prop = builder.get_node_or_null(NodePath(String(prop_name))) if builder != null else null
+		if prop != null:
+			props.append(prop)
+	return props
+
+# A log in the arms slows the player (see Carrier._carry_speed_mult)
+func _carry_speed_mult() -> float:
+	return ResourceProp.carry_speed_mult(_carried_props(Globals.online_client))
+
+## The closest prop within GRAB_REACH that can be picked up and that the hands have room for: fruit, and logs (a log needs free arms,
+## see ResourceProp.has_room_for). Logs lying on the stockpile count only once settled on it.
 ## On a client every prop is a puppet of the server's, which has the final say (can_be_grabbed) anyway.
 func _nearest_grabbable(is_client: bool) -> ResourceProp:
 	var nearest: ResourceProp = null
 	var best := GRAB_REACH * GRAB_REACH
+	var carried := _carried_props(is_client)
 	for node in get_tree().get_nodes_in_group("resource_prop"):
 		var prop := node as ResourceProp
 		if prop == null or prop.collected:
@@ -318,10 +330,10 @@ func _nearest_grabbable(is_client: bool) -> ResourceProp:
 			continue
 		if is_client and _held_prop_names.has(String(prop.name)):
 			continue # already on our stack
-		if builder.is_stacked_type(String(prop.get_meta("resource_type", ""))):
-			# Logs are shoved, not carried -- except the ones lying on the stockpile, which can be taken (stolen), one at a time
-			if not prop.in_pile or not prop.has_arrived() or not (_held_prop_names if is_client else _held_props).is_empty():
-				continue
+		if not ResourceProp.has_room_for(carried, prop):
+			continue
+		if prop.is_log() and prop.in_pile and not prop.has_arrived():
+			continue # still flying onto the pile
 		var d := global_position.distance_to(prop.global_position)
 		if d < best:
 			best = d
@@ -339,13 +351,16 @@ func _update_grab_online() -> void:
 		var held := builder.get_node_or_null(NodePath(String(_held_prop_names[i]))) as ResourceProp
 		if held == null or held.collected:
 			_held_prop_names.remove_at(i) # it was collected (or is gone)
-	var full := _held_prop_names.size() >= ResourceProp.MAX_CARRY
-	var nearest: ResourceProp = null if full else _nearest_grabbable(true)
+	var full := _held_prop_names.size() >= ResourceProp.MAX_CARRY or _holding_log()
+	var nearest: ResourceProp = _nearest_grabbable(true)
 	if Input.is_action_just_pressed("drop") and not _held_prop_names.is_empty():
 		sync.req_prop_grab(String(_held_prop_names.pop_back()), false)
 	var drop_hint := "   [Q] Drop" if not _held_prop_names.is_empty() else ""
 	if nearest != null:
-		_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_prop_names.size(), ResourceProp.MAX_CARRY, drop_hint])
+		if nearest.is_log():
+			_set_grab_hint("[E] Grab log%s" % drop_hint)
+		else:
+			_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_prop_names.size(), ResourceProp.MAX_CARRY, drop_hint])
 		if Input.is_action_just_pressed("grab"):
 			sync.req_prop_grab(String(nearest.name), true)
 			_held_prop_names.append(String(nearest.name)) # optimistic; _on_grab_result removes it if the server said no
@@ -465,7 +480,7 @@ func _update_gathering(delta: float) -> void:
 	
 	var result: Dictionary = builder.add_chop_progress(gather_target_id, delta / structure.gather_time)
 	if result.get("completed", false):
-		energy += result.get("energy_bonus", 0.0)
+		hunger += result.get("hunger_bonus", 0.0)
 		_stop_gathering()
 
 # Called every physics frame while the mouse button is held on a structure and Del is held too. The ring over

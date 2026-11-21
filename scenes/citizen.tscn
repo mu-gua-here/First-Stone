@@ -41,6 +41,9 @@ properties/7/replication_mode = 2
 properties/8/path = NodePath(".:net_hostile")
 properties/8/spawn = true
 properties/8/replication_mode = 2
+properties/9/path = NodePath(".:net_hunger")
+properties/9/spawn = true
+properties/9/replication_mode = 2
 
 [node name="Citizen" type="CharacterBody3D" unique_id=408327407]
 collision_layer = 4

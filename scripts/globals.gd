@@ -7,6 +7,7 @@ extends Node3D
 
 var player: CharacterBody3D = null
 var builder: Node = null
+var day_night: Node = null # the DayNightCycle: the game's clock (see game_days)
 
 ## Multiplayer (set by Network in its _ready). The dedicated server runs the world's simulation -- the Builder and
 ## every citizen's AI. Clients get their citizens as puppets replicated from the server.
@@ -27,6 +28,14 @@ func register_player(p: CharacterBody3D) -> void:
 
 func register_builder(b: Node) -> void:
 	builder = b
+
+func register_day_night(d: Node) -> void:
+	day_night = d
+
+## In-game days elapsed since the game started (a fraction while a day is in progress; 0.0 without a day/night cycle).
+## Regrowth and births count time in these, so they follow the day length and stand still while the clock is stopped.
+func game_days() -> float:
+	return day_night.total_days if day_night != null else 0.0
 
 func get_player_position() -> Vector3:
 	if player:

@@ -33,4 +33,6 @@ fog_enabled = true
 fog_mode = 1
 fog_density = 0.8
 fog_sky_affect = 0.0
-adjustment_brightness = 0.0
+volumetric_fog_enabled = true
+volumetric_fog_emission_energy = 3.0
+volumetric_fog_sky_affect = 0.0

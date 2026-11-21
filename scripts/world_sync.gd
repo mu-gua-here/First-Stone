@@ -153,12 +153,16 @@ func _apply(event: String, a: Array, replay: bool = false) -> void:
 			builder.clear_chop_progress(a[0])
 			if builder.placed_structures.has(a[0]):
 				builder.remove_structure_instance(a[0])
+		"regrow":
+			builder._regrow_tree(a[0], a[1], a[2], a[3]) # a felled tree's stump grew a new tree
 		"prop_spawn":
 			builder._create_prop(a[0], a[1], a[2], a[3], a[4], true)
 		"prop_collected":
 			builder.mark_prop_collected(a[0], not replay)
 		"prop_consume":
 			builder.consume_prop(a[0])
+		"zones":
+			builder.apply_zones(a[0], a[1]) # tiles designated as a zone (stockpile, gathering...)
 
 
 func _on_peer_connected(peer_id: int) -> void:
@@ -325,6 +329,15 @@ func _req_build(structure_index: int, cell: Vector3i, rotation_y: float, world_p
 	if multiplayer.is_server():
 		builder.perform_build(structure_index, cell, rotation_y, world_position)
 
+func req_zones(cells: Array, zone: int) -> void:
+	if _online():
+		_req_zones.rpc_id(1, cells, zone)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _req_zones(cells: Array, zone: int) -> void:
+	if multiplayer.is_server():
+		builder.perform_paint_zones(cells, zone)
+
 
 @rpc("any_peer", "call_remote", "reliable")
 func req_demolish_progress(id: String, amount: float) -> void:
@@ -350,16 +363,16 @@ func req_chop(id: String, amount: float) -> void:
 	if Builder.flat_distance(avatar.net_position, pos) > builder.get_gather_reach(id) + REACH_SLACK:
 		return # not actually next to it
 	var result: Dictionary = builder.add_chop_progress(id, clampf(amount, 0.0, MAX_CHOP_STEP))
-	var bonus: float = result.get("energy_bonus", 0.0)
+	var bonus: float = result.get("hunger_bonus", 0.0)
 	if result.get("completed", false) and bonus > 0.0:
-		grant_energy.rpc_id(sender, bonus) # the player's energy lives on their own client
+		grant_hunger.rpc_id(sender, bonus) # the player's hunger lives on their own client
 
 
 @rpc("authority", "call_remote", "reliable")
-func grant_energy(amount: float) -> void:
+func grant_hunger(amount: float) -> void:
 	var player := Globals.player
 	if player != null:
-		player.energy += amount
+		player.hunger += amount
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -423,7 +436,7 @@ func _req_prop_grab(prop_name: String, want: bool) -> void:
 	var prop := builder.get_node_or_null(NodePath(prop_name)) as ResourceProp
 	var avatar := _avatar(sender)
 	var carried: Array = _held_by.get(sender, [])
-	var ok := prop != null and avatar != null and carried.size() < ResourceProp.MAX_CARRY and not carried.has(prop.name) \
+	var ok := prop != null and avatar != null and _has_room_for(carried, prop) and not carried.has(prop.name) \
 			and prop.can_be_grabbed() and avatar.net_position.distance_to(prop.global_position) <= GRAB_RANGE
 	if ok:
 		prop.grab()
@@ -434,6 +447,16 @@ func _req_prop_grab(prop_name: String, want: bool) -> void:
 @rpc("authority", "call_remote", "reliable")
 func answer_prop_grab(prop_name: String, ok: bool) -> void:
 	grab_result.emit(prop_name, ok)
+
+## Server: does a client already carrying the props named in `carried` have room for `prop`? (small items stack, a log
+## needs free arms and only MAX_CARRY_LOGS fit, see ResourceProp.has_room_for)
+func _has_room_for(carried: Array, prop: ResourceProp) -> bool:
+	var props: Array = []
+	for held_name in carried:
+		var held := builder.get_node_or_null(NodePath(String(held_name))) as ResourceProp
+		if held != null:
+			props.append(held)
+	return ResourceProp.has_room_for(props, prop)
 
 ## Server: let go of what `peer_id` is carrying -- just the named prop, or everything when no name is given
 ## (they dropped it, or left)
@@ -475,7 +498,7 @@ func _carry_held_props() -> void:
 			if prop == null or prop.collected:
 				carried.erase(prop_name) # collected (or gone): the stack closes up
 				continue
-			prop.carry_to(avatar.net_position + ResourceProp.carry_offset(slot, forward))
+			prop.carry_to(avatar.net_position + ResourceProp.carry_offset(slot, forward), forward)
 			slot += 1
 		if carried.is_empty():
 			_held_by.erase(peer_id)

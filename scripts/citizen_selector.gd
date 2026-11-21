@@ -380,7 +380,7 @@ func _refresh_panel() -> void:
 	stats_label.append_text("[b]Job:[/b] %s" % job_text)
 
 	_begin_bars()
-	_set_bar("Happiness", d.happiness, 100.0) # health and energy are on the citizen's nameplate now
+	_set_bar("Happiness", d.happiness, 100.0) # health and hunger/energy are on the citizen's nameplate now
 	_end_bars()
 
 	hostile_label.visible = selected_citizen.has_method("get") and "is_chasing_player" in selected_citizen and selected_citizen.is_chasing_player

@@ -27,7 +27,8 @@ extends Node
 
 const _CITIZEN_FIELDS := {
 	"age": "_get_citizen_age",
-	"energy": "_get_citizen_energy",
+	"hunger": "_get_citizen_hunger",       # how well fed (100 = full), see Carrier
+	"energy": "_get_citizen_energy",       # how rested (100 = fresh), see Carrier
 	"happiness": "_get_citizen_happiness",
 	"health": "_get_citizen_health",
 	"job": "_get_citizen_job",
@@ -36,12 +37,15 @@ const _CITIZEN_FIELDS := {
 	"approval": "_get_citizen_approval",
 	# Situation fields the default traditions read (see citizen.gd). Booleans/strings the engine derives for the
 	# citizen so a rule can say "WHEN [Hungry] is [true]" without knowing any thresholds.
-	"hungry": "_get_citizen_hungry",            # energy below Builder.hungry_below
+	"hungry": "_get_citizen_hungry",            # hunger below Builder.hungry_below
 	"food_available": "_get_citizen_food_available", # the stockpile has food
 	"eat_ready": "_get_citizen_eat_ready",       # not already eating, not mid-shove, not sulking after giving up
-	"busy": "_get_citizen_busy",                 # chopping, building, pushing a log or eating
+	"is_night": "_get_citizen_is_night",         # between Builder.night_starts and Builder.night_ends
+	"shelter_available": "_get_citizen_shelter_available", # the settlement has at least one shelter (a house)
+	"rest_ready": "_get_citizen_rest_ready",     # not already resting, not mid-shove, not sulking after failing to reach a shelter
+	"busy": "_get_citizen_busy",                 # chopping, building, pushing a log, eating or resting
 	"wander_ready": "_get_citizen_wander_ready", # the idle timer ran out
-	"task": "_get_citizen_task",                 # "idle", "gathering", "building", "pushing", "hauling", "eating"
+	"task": "_get_citizen_task",                 # "idle", "gathering", "building", "pushing", "hauling", "eating", "resting"
 }
 
 const _BUILDING_FIELDS := {
@@ -149,20 +153,29 @@ func _is_citizen(subject) -> bool:
 	return subject is Node and subject.is_in_group("citizen")
 
 func _get_citizen_age(citizen): return citizen.data.age
-func _get_citizen_energy(citizen): return citizen.data.energy
+# The stats live on the citizen's body (Carrier), not on its CitizenData
+func _get_citizen_hunger(citizen): return citizen.hunger
+func _get_citizen_energy(citizen): return citizen.energy
 func _get_citizen_happiness(citizen): return citizen.data.happiness
-func _get_citizen_health(citizen): return citizen.data.health
+func _get_citizen_health(citizen): return citizen.health
 func _get_citizen_job(citizen): return citizen.data.job
 func _get_citizen_job_satisfaction(citizen): return citizen.data.job_satisfaction
 func _get_citizen_housing_satisfaction(citizen): return citizen.data.housing_satisfaction
 func _get_citizen_approval(citizen): return citizen.data.approval
 func _get_citizen_hungry(citizen):
 	var b = _builder()
-	return b != null and citizen.data.energy < b.hungry_below
+	return b != null and citizen.hunger < b.hungry_below
 func _get_citizen_food_available(_citizen):
 	var b = _builder()
 	return b != null and b.has_food()
 func _get_citizen_eat_ready(citizen): return citizen.eat_ready()
+func _get_citizen_is_night(_citizen):
+	var b = _builder()
+	return b != null and b.is_night()
+func _get_citizen_shelter_available(_citizen):
+	var b = _builder()
+	return b != null and not b.shelter_ids().is_empty()
+func _get_citizen_rest_ready(citizen): return citizen.rest_ready()
 func _get_citizen_busy(citizen): return citizen.is_busy()
 func _get_citizen_wander_ready(citizen): return citizen.wander_ready()
 func _get_citizen_task(citizen): return citizen.task_name()
@@ -258,6 +271,9 @@ func _dispatch(action: Action, subject, resolved_target = null) -> bool:
 				subject.start_wander()
 				return true
 			return false
+
+		Action.Kind.REST:
+			return _is_citizen(subject) and subject.has_method("start_resting") and subject.start_resting()
 
 	push_warning("PolicyEngine.execute: unhandled Action.Kind %s" % action.kind)
 	return false
@@ -398,6 +414,22 @@ func _install_default_traditions() -> void:
 	eat.condition = Condition.op_and(eat_when)
 	eat.action = Action.new_eat()
 	add_policy(eat)
+
+	# Night is for sleeping: head for a shelter and rest there until morning (energy only recharges that way).
+	# Below eating (a starving citizen eats first) but a survival rule, so it also overrides a task handed out by hand.
+	var sleep_when: Array[Condition] = [
+		Condition.leaf("is_night", "==", true),
+		Condition.leaf("shelter_available", "==", true),
+		Condition.leaf("rest_ready", "==", true),
+	]
+	var sleep := Policy.new()
+	sleep.policy_name = "Sleep in a shelter at night"
+	sleep.priority = 90
+	sleep.survival = true
+	sleep.is_default = true
+	sleep.condition = Condition.op_and(sleep_when)
+	sleep.action = Action.new_rest()
+	add_policy(sleep)
 
 	var wander_when: Array[Condition] = [
 		Condition.leaf("busy", "==", false),

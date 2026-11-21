@@ -43,9 +43,9 @@ enum JobTask { NONE, GATHER, BUILD, HAUL, FORAGE }
 @export var secondary_yield_min: int = 0 # Fruit per tree, rolled per tree between min and max
 @export var secondary_yield_max: int = 0
 @export var gather_time: float = 3.0 # Seconds a citizen must spend gathering before the yield is granted
-@export var energy_required: float = 1.0 # Energy collecting the resource costs player/NPC
-@export_range(0.0, 1.0) var food_chance: float = 0.1 # chance this gatherable yields bonus energy for whoever chops it down (e.g. a tree occasionally carrying something edible)
-@export var food_energy_bonus: float = 15.0 # energy granted to the gatherer on a successful food_chance roll
+@export var energy_required: float = 1.0 # Energy (tiredness) collecting the resource costs player/NPC per second
+@export_range(0.0, 1.0) var food_chance: float = 0.1 # chance this gatherable yields bonus food for whoever chops it down (e.g. a tree occasionally carrying something edible)
+@export var food_hunger_bonus: float = 15.0 # hunger restored to the gatherer on a successful food_chance roll
 
 @export_subgroup("Construction")
 @export var build_cost: Dictionary = {} # resource_type (String) -> amount required from the stockpile, drawn down as builders work the site
@@ -81,7 +81,7 @@ func get_job_title() -> String:
 	return get_display_name()
 
 # Hide the Inspector fields that don't apply (values stay stored; they just aren't shown)
-const _GATHERABLE_ONLY := ["depleted_item_name", "resource_type", "resource_yield", "resource_yield_max", "secondary_resource_type", "secondary_yield_min", "secondary_yield_max", "gather_time", "energy_required", "food_chance", "food_energy_bonus"]
+const _GATHERABLE_ONLY := ["depleted_item_name", "resource_type", "resource_yield", "resource_yield_max", "secondary_resource_type", "secondary_yield_min", "secondary_yield_max", "gather_time", "energy_required", "food_chance", "food_hunger_bonus"]
 const _BUILDING_ONLY := ["type", "happiness_bonus", "build_cost", "build_time", "build_energy_required", "demolish_time"]
 
 func _validate_property(property: Dictionary) -> void:

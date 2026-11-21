@@ -14,6 +14,8 @@ shader_type spatial;
 // this, remove it: it would mean the prepass is leaking into depth_texture.
 render_mode blend_mix, depth_draw_always, depth_prepass_alpha, diffuse_lambert, specular_schlick_ggx, cull_disabled, fog_disabled;
 
+#include "res://shaders/clouds.gdshaderinc" // the same clouds as the sky's cloud layer, mirrored in the water (Ultra graphics)
+
 // Environment fog is applied by the engine as a colour tint only: it never raises ALPHA, so a half-transparent ocean stays
 // half see-through however thick the fog is (that's why it looked unfogged). fog_disabled turns the engine fog off for this
 // shader and the same depth fog is done below in fragment(), fading the alpha too. DayNightCycle writes these uniforms from the
@@ -61,6 +63,12 @@ uniform float quad_size = 4.0;
 uniform float facet_softness : hint_range(0.0, 1.0) = 0.35;
 
 uniform sampler2D depth_texture : hint_depth_texture, filter_linear_mipmap;
+
+// Ultra graphics preset (DayNightCycle sets it): glassier water that mirrors the sky, strongest at grazing angles.
+// Screen-space reflections can't draw on a transparent surface, so this is the water's own reflection.
+uniform float reflection_boost : hint_range(0.0, 1.0) = 0.0;
+// Clouds mirrored in the water (High and Ultra graphics): separate from reflection_boost so High gets them without Ultra's glassy look.
+uniform float cloud_reflection : hint_range(0.0, 1.0) = 0.0;
 
 varying vec3 v_world_pos;
 varying vec3 v_normal; // world-space flat QUAD normal, identical on all 6 vertices of a tile
@@ -155,10 +163,27 @@ void fragment() {
 		float fog_amount = pow(fog_t, env_fog_curve) * env_fog_density;
 		result = mix(result, env_fog_color, fog_amount);
 		alpha = mix(alpha, 1.0, fog_amount);
+		// Sky reflection: raise opacity with the fresnel term so the (specular) reflection shows through the see-through water
+		float ndotv = clamp(dot(normalize(NORMAL), normalize(VIEW)), 0.0, 1.0);
+		float fresnel = pow(1.0 - ndotv, 4.0);
+		alpha = mix(alpha, 1.0, fresnel * reflection_boost * 0.6);
+
+		// Cloud reflection: bounce the view ray off the water, find where it meets the cloud layer, and paint those clouds on
+		// the surface (the sky itself is only a gradient, so without this there is nothing to reflect)
+		if (cloud_reflection > 0.0) {
+			vec3 refl = normalize((INV_VIEW_MATRIX * vec4(reflect(-VIEW, NORMAL), 0.0)).xyz);
+			if (refl.y > 0.03) {
+				vec2 hit = v_world_pos.xz + refl.xz * ((cloud_height - v_world_pos.y) / refl.y);
+				float density = cloud_density(hit);
+				float amount = density * cloud_distance_fade(hit, CAMERA_POSITION_WORLD.xz) * pow(1.0 - ndotv, 3.0) * cloud_reflection;
+				result = mix(result, cloud_shaded(hit, density), amount);
+				alpha = mix(alpha, 1.0, amount);
+			}
+		}
 	}
 
 	ALBEDO = result;
 	ALPHA = alpha;
-	ROUGHNESS = roughness;
-	SPECULAR = 0.5;
+	ROUGHNESS = mix(roughness, 0.05, reflection_boost);
+	SPECULAR = mix(0.5, 1.0, reflection_boost);
 }

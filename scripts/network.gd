@@ -14,7 +14,7 @@ class_name Network
 ## key/cert arguments above, or put a TLS proxy (Caddy, nginx, Cloudflare Tunnel) in front of it.
 ##
 ## Everyone plays their own copy of the world; what is shared is the players themselves: position, name,
-## health, energy and pushing each other (see net_player.gd).
+## health, hunger, energy and pushing each other (see net_player.gd).
 
 const DEFAULT_PORT := 8910
 const BUFFER_SIZE := 1 << 20 # bytes; the default (64 KB) is too small for catching a new player up
@@ -109,9 +109,32 @@ func _ask_for_name() -> void:
 	name_edit.text_submitted.connect(_on_name_confirmed)
 	name_dialog.visible = true
 	get_tree().paused = true
-	name_edit.grab_focus()
-	name_edit.select_all()
+	if _is_touch_web():
+		# Browsers only open the on-screen keyboard from inside a real tap, so focusing the field here (no tap yet) would
+		# leave it focused but keyboard-less and impossible to type into. Wait for the player to tap it instead.
+		name_edit.virtual_keyboard_enabled = true
+		name_edit.gui_input.connect(_on_name_edit_gui_input)
+	else:
+		name_edit.grab_focus()
+		name_edit.select_all()
 	_set_status("Choose a name")
+
+
+# Phones/tablets in the browser (itch.io mobile page)
+func _is_touch_web() -> bool:
+	return OS.has_feature("web") and (OS.has_feature("web_android") or OS.has_feature("web_ios") \
+			or DisplayServer.is_touchscreen_available())
+
+
+# Called inside the tap itself, which is what lets the browser raise the virtual keyboard
+func _on_name_edit_gui_input(event: InputEvent) -> void:
+	var tapped: InputEvent = (event is InputEventScreenTouch and event.pressed) \
+			or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT)
+	if not tapped:
+		return
+	name_edit.grab_focus()
+	DisplayServer.virtual_keyboard_show(name_edit.text, name_edit.get_global_rect(), DisplayServer.KEYBOARD_TYPE_DEFAULT,
+			MAX_NAME_LENGTH, name_edit.caret_column, name_edit.caret_column)
 
 
 func _on_name_confirmed(_text: String = "") -> void:
@@ -128,6 +151,7 @@ func _on_name_confirmed(_text: String = "") -> void:
 		own_plate.set_player_name(clean) # your own name above your own head
 	name_dialog.visible = false
 	name_edit.release_focus()
+	DisplayServer.virtual_keyboard_hide()
 	get_tree().paused = false
 	_connect()
 

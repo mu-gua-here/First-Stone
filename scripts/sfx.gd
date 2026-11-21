@@ -14,8 +14,10 @@ var _next := 0
 var _cache := {} # path -> AudioStream
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS # the pause menu plays a sample while you drag the volume sliders
 	for i in POOL_SIZE:
 		var player := AudioStreamPlayer.new()
+		player.bus = &"Effects" # see audio/bus_layout.tres (falls back to Master if the bus is missing)
 		add_child(player)
 		_players.append(player)
 

@@ -90,6 +90,98 @@ class_name DayNightCycle
 # fighting theirs -- e.g. while the camera is underwater.
 var suppress_fog := false
 
+## Ultra graphics preset (pause_menu.gd, Forward+ only): SSR, SSAO and volumetric fog (with light shafts from the sun) replace the
+## depth fog, and the ocean shader gets sharper sky reflections. Screen-space reflections can't touch a transparent surface,
+## so the water's reflections come from its own shader (reflection_boost).
+var fancy_lighting := false
+## Cloud layer (High and Ultra, set by pause_menu.gd): the visible clouds and their reflection in the ocean
+var clouds_enabled := false
+
+@export_group("Ultra lighting")
+@export var noon_volumetric_density := 0.01
+@export var night_volumetric_density := 0.025
+## The volumetric fog glows in the fog's own time-of-day colour (the same one the depth fog uses) at this strength, so it
+## is bright and pale at noon and a faint blue at night instead of being lit by the sun alone.
+@export var noon_volumetric_emission_strength := 0.35
+@export var night_volumetric_emission_strength := 0.06
+
+@export_group("Clouds")
+## Cloud layer + the same clouds in the ocean's reflections (shaders/clouds.gdshaderinc). Shown on High and Ultra (clouds_enabled).
+## cloud_layer is a big plane that follows the camera with shaders/cloud_layer.gdshader on it.
+@export var cloud_layer: MeshInstance3D
+@export var cloud_height := 320.0
+@export var cloud_wind := Vector2(6.0, 2.0) # m/s
+@export_range(0.0, 1.0) var cloud_coverage := 0.5
+@export var noon_cloud_color := Color(1.0, 1.0, 1.0)
+@export var night_cloud_color := Color(0.1, 0.12, 0.2)
+@export var noon_cloud_shade_color := Color(0.62, 0.68, 0.78)
+@export var night_cloud_shade_color := Color(0.03, 0.04, 0.08)
+var _cloud_offset := Vector2.ZERO
+var _fancy_applied := false
+
+func _update_clouds(delta: float) -> void:
+	if cloud_layer == null:
+		return
+	cloud_layer.visible = clouds_enabled
+	if ocean_material != null:
+		ocean_material.set_shader_parameter("cloud_reflection", 1.0 if clouds_enabled else 0.0)
+	if not clouds_enabled:
+		return
+	var day_pct := clampf(sin(time_of_day * TAU - PI / 2.0), 0.0, 1.0)
+	_cloud_offset += cloud_wind * delta
+	var camera := get_viewport().get_camera_3d()
+	if camera != null:
+		cloud_layer.global_position = Vector3(camera.global_position.x, cloud_height, camera.global_position.z)
+	var to_sun := Vector2(sun.global_transform.basis.z.x, sun.global_transform.basis.z.z) if sun != null else Vector2.ZERO
+	for material in [cloud_layer.material_override as ShaderMaterial, ocean_material]:
+		if material == null:
+			continue
+		material.set_shader_parameter("cloud_height", cloud_height)
+		material.set_shader_parameter("cloud_offset", _cloud_offset)
+		material.set_shader_parameter("cloud_coverage", cloud_coverage)
+		material.set_shader_parameter("cloud_color", night_cloud_color.lerp(noon_cloud_color, day_pct))
+		material.set_shader_parameter("cloud_shade_color", night_cloud_shade_color.lerp(noon_cloud_shade_color, day_pct))
+		if to_sun.length() > 0.001:
+			material.set_shader_parameter("cloud_sun_dir", to_sun.normalized())
+
+func _apply_fancy_lighting(env: Environment, day_pct: float) -> void:
+	var supports_fancy_lighting := RenderingServer.get_current_rendering_method() == "forward_plus" and not OS.has_feature("web")
+	if fancy_lighting and supports_fancy_lighting:
+		_fancy_applied = true
+		env.fog_enabled = false
+		if not env.ssr_enabled:
+			env.ssr_enabled = true
+		if not env.ssao_enabled:
+			env.ssao_enabled = true
+		if not env.volumetric_fog_enabled:
+			env.volumetric_fog_enabled = true
+		env.volumetric_fog_density = lerpf(night_volumetric_density, noon_volumetric_density, day_pct)
+		env.volumetric_fog_albedo = env.fog_light_color
+		var glow := lerpf(night_volumetric_emission_strength, noon_volumetric_emission_strength, day_pct)
+		env.volumetric_fog_emission = Color(env.fog_light_color.r * glow, env.fog_light_color.g * glow, env.fog_light_color.b * glow)
+		env.volumetric_fog_length = maxf(noon_fog_depth_end * fog_distance_scale / _fog_mult, 64.0)
+	elif _fancy_applied:
+		_fancy_applied = false # back to the authored depth fog
+		env.fog_enabled = true
+		env.ssr_enabled = false
+		env.ssao_enabled = false
+		if supports_fancy_lighting:
+			env.volumetric_fog_enabled = false
+
+# Set by the pause menu's graphics presets (pause_menu.gd). They live here because _apply() rewrites the sun's shadow flag
+# and the fog every frame, so setting them on the sun / environment directly would be overwritten straight away.
+var shadows_enabled := true # false = the sun never casts shadows
+var fog_distance_scale := 1.0 # below 1 pulls the fog in, so a shorter camera far plane stays hidden inside it
+var fog_min_density := 0.0 # raises the fog's maximum opacity (0 = leave the authored curve alone)
+
+## Farthest distance the fog still lets you see (any time of day). The low graphics preset sets the camera's far plane just past it.
+func max_fog_end() -> float:
+	return maxf(noon_fog_depth_end, night_fog_depth_end) * fog_distance_scale / _fog_mult
+
+## In-game days elapsed since the game started (fraction included). The clock for everything that takes days: regrowth, births.
+## It only advances while `enabled`, so stopping the cycle stops the world's slow processes too.
+var total_days := 0.0
+
 # Writing to ProceduralSkyMaterial properties forces Godot to re-bake the sky
 # radiance/reflection map that frame -- very expensive (measured ~23% of CPU
 # frame time on web export)
@@ -112,6 +204,7 @@ var _sun_disc: DirectionalLight3D
 var _moon_disc: DirectionalLight3D
 
 func _ready() -> void:
+	Globals.register_day_night(self)
 	if moon == null:
 		moon = DirectionalLight3D.new()
 		moon.name = "Moon"
@@ -137,6 +230,7 @@ func _make_sky_disc(disc_name: String) -> DirectionalLight3D:
 
 
 func _process(delta: float) -> void:
+	_update_clouds(delta)
 	# NOTE: `enabled` used to only gate whether time_of_day advances, while
 	# _apply() ran every frame regardless
 	if not enabled:
@@ -145,6 +239,7 @@ func _process(delta: float) -> void:
 	if day_length_seconds <= 0.0:
 		day_length_seconds = 1.0
 	time_of_day = fposmod(time_of_day + delta / day_length_seconds, 1.0)
+	total_days += delta / day_length_seconds
 	_apply(time_of_day)
 
 
@@ -167,7 +262,7 @@ func _apply(t: float) -> void:
 		var energy: float = lerp(night_light_energy, noon_light_energy, day_pct)
 		sun.light_energy = lerp(energy, horizon_light_energy, horizon_pct)
 
-		sun.shadow_enabled = day_pct > 0.02 or horizon_pct > 0.3
+		sun.shadow_enabled = shadows_enabled and (day_pct > 0.02 or horizon_pct > 0.3)
 
 		# Moon: always the exact opposite direction of the sun (flip 180 deg about its
 		# local Y so -Z, the light direction, reverses). Fades in as the sun sets.
@@ -213,12 +308,15 @@ func _apply(t: float) -> void:
 		# Skipped while view.gd while the camera is underwater
 		if not suppress_fog:
 			env.fog_light_color = night_fog_color.lerp(noon_fog_color, day_pct)
-			env.fog_density = lerp(night_fog_density, noon_fog_density, day_pct)
-			env.fog_depth_begin = lerp(night_fog_depth_begin, noon_fog_depth_begin, day_pct) / _fog_mult
-			env.fog_depth_end = lerp(night_fog_depth_end, noon_fog_depth_end, day_pct) / _fog_mult
+			env.fog_density = maxf(lerp(night_fog_density, noon_fog_density, day_pct), fog_min_density)
+			env.fog_depth_begin = lerp(night_fog_depth_begin, noon_fog_depth_begin, day_pct) * fog_distance_scale / _fog_mult
+			env.fog_depth_end = lerp(night_fog_depth_end, noon_fog_depth_end, day_pct) * fog_distance_scale / _fog_mult
 			if ocean_material != null:
 				ocean_material.set_shader_parameter("env_fog_color", env.fog_light_color)
 				ocean_material.set_shader_parameter("env_fog_begin", env.fog_depth_begin)
 				ocean_material.set_shader_parameter("env_fog_end", env.fog_depth_end)
 				ocean_material.set_shader_parameter("env_fog_curve", env.fog_depth_curve)
-				ocean_material.set_shader_parameter("env_fog_density", env.fog_density if env.fog_enabled else 0.0)
+				# (with fancy lighting the engine fog is off, but the transparent ocean still fades out with the same depth fog)
+				ocean_material.set_shader_parameter("env_fog_density", env.fog_density if (env.fog_enabled or fancy_lighting) else 0.0)
+				ocean_material.set_shader_parameter("reflection_boost", 1.0 if fancy_lighting else 0.0)
+			_apply_fancy_lighting(env, day_pct)

@@ -29,6 +29,9 @@ properties/3/replication_mode = 2
 properties/4/path = NodePath(".:player_color")
 properties/4/spawn = true
 properties/4/replication_mode = 2
+properties/5/path = NodePath(".:net_hunger")
+properties/5/spawn = true
+properties/5/replication_mode = 2
 
 [node name="NetPlayer" type="CharacterBody3D" unique_id=1705756060 node_paths=PackedStringArray("nameplate", "body_mesh")]
 collision_layer = 0

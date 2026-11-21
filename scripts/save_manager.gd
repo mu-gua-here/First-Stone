@@ -100,6 +100,7 @@ func save_game() -> void:
 		_end()
 		return
 	_capture_buildings(b, data)
+	_capture_zones(b, data)
 	if not await _capture_props(data):
 		_end()
 		return
@@ -118,6 +119,15 @@ func save_game() -> void:
 	cancel_button.visible = false
 	await get_tree().create_timer(0.6).timeout
 	_end()
+
+func _capture_zones(b: Builder, data: SaveData) -> void:
+	data.zones_saved = true
+	for type in ZoneMap.BRUSHES:
+		if type == ZoneMap.Type.NONE:
+			continue
+		for cell in b.zones.cells_of(type):
+			data.zone_cells.append(Vector3(cell))
+			data.zone_names.append(ZoneMap.item_name(type))
 
 func _capture_buildings(b: Builder, data: SaveData) -> void:
 	for id in b.placed_structures:
@@ -201,6 +211,8 @@ func _apply_saved_game() -> void:
 	if not await _apply_buildings(b, data):
 		_end()
 		return
+	if data.zones_saved:
+		b.restore_zones(data.zone_cells, data.zone_names)
 	if not await _apply_props(b, data):
 		_end()
 		return

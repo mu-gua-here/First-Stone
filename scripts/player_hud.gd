@@ -1,11 +1,11 @@
 extends CanvasLayer
 class_name PlayerHUD
 
-## Player vitals, always on screen: health bottom-left, energy bottom-right, plus red / yellow gradients
-## on the screen edges (red: low health + hits) and a grey/blurry tunnel-vision effect for low energy AND low health.
+## Player vitals, always on screen: health bottom-left, hunger and energy bottom-right, plus red / yellow gradients
+## on the screen edges (red: low health + hits) and a grey/blurry tunnel-vision effect for low hunger / energy AND low health.
 ## The grey effect stacks: being low on both is stronger than either alone (mirrors the player's movement slowdown).
 ## All the UI nodes live in main.tscn under PlayerHUD -- restyle/move them in the 2D editor.
-## This script only feeds them numbers. It reads the Player's health_changed / energy_changed
+## This script only feeds them numbers. It reads the Player's health_changed / hunger_changed / energy_changed
 ## signals: the Player owns those stats, nothing is duplicated here.
 
 @export_group("Nodes")
@@ -13,12 +13,14 @@ class_name PlayerHUD
 @export var energy_vignette: ColorRect ## full-screen quad with the low_energy_grey shader: drains colour, darkens + blurs the edges (low energy and/or low health). Drawn under the red one
 @export var health_bar: ProgressBar
 @export var health_label: Label
+@export var hunger_bar: ProgressBar
+@export var hunger_label: Label
 @export var energy_bar: ProgressBar
 @export var energy_label: Label
 @export var clock_label: Label ## top-left in-game clock (12h). Show/hide it with the toggle_clock action (G)
 @export var day_night: DayNightCycle ## where the in-game time of day is read from
 
-@export_group("Low-health warning (red)")
+@export_group("Low-health warning")
 ## Below this much health (in HP) the red edge stays on screen permanently.
 @export var low_health_threshold := 30.0
 ## Intensity (as a fraction of warning_max_intensity) right at the threshold. It rises linearly
@@ -42,13 +44,13 @@ class_name PlayerHUD
 ## How fast the low-health vignette eases DOWN as health recovers (hits always show instantly).
 @export var smoothing := 6.0
 
-@export_group("Low-energy / low-health effect (grey)")
-## Below this fraction of energy OR health the grey effect starts fading in (full at 0).
+@export_group("Low-health effect")
+## Below this fraction of hunger, energy OR health the grey effect starts fading in (full at 0).
 @export_range(0.05, 0.9) var low_threshold := 0.3
-## Peak strength of the grey effect when only ONE of energy / health is low (1 = nearly black-and-white,
+## Peak strength of the grey effect when only ONE of hunger / energy / health is low (1 = nearly black-and-white,
 ## dark and blurry at the edges). It shows together with the red health warning.
 @export_range(0.0, 1.0) var energy_warning_max_intensity := 0.7
-## Peak strength when BOTH energy and health are low. Should be higher than the single-stat peak.
+## Peak strength when TWO OR MORE are low. Should be higher than the single-stat peak.
 @export_range(0.0, 1.0) var combined_warning_max_intensity := 0.95
 
 var _player = null # the Player (untyped: its signals/stats live on player.gd)
@@ -57,6 +59,7 @@ var _energy_vignette_mat: ShaderMaterial
 
 var _health_hp := 100.0
 var _health_frac := 1.0
+var _hunger_frac := 1.0
 var _energy_frac := 1.0
 var _last_health := -1.0
 var _flash := 0.0
@@ -98,12 +101,12 @@ func _process(delta: float) -> void:
 	if vignette.visible:
 		_vignette_mat.set_shader_parameter("intensity", _intensity)
 	
-	# Grey low-energy / low-health effect. Either stat being low brings it in; when both are low the
-	# two stack so it gets stronger than with just one (red is drawn on top and shows independently).
-	var energy_low := _low_amount(_energy_frac)
-	var health_low := _low_amount(_health_frac)
-	var energy_target := maxf(energy_low, health_low) * energy_warning_max_intensity \
-			+ minf(energy_low, health_low) * maxf(combined_warning_max_intensity - energy_warning_max_intensity, 0.0)
+	# Grey low-hunger / low-energy / low-health effect. Any of the three being low brings it in; when two or more are low
+	# they stack so it gets stronger than with just one (red is drawn on top and shows independently).
+	var lows := [_low_amount(_hunger_frac), _low_amount(_energy_frac), _low_amount(_health_frac)]
+	lows.sort() # ascending: the biggest is last
+	var energy_target: float = float(lows[2]) * energy_warning_max_intensity \
+			+ minf(float(lows[1]), float(lows[2])) * maxf(combined_warning_max_intensity - energy_warning_max_intensity, 0.0)
 	_energy_intensity = lerpf(_energy_intensity, energy_target, clampf(smoothing * delta, 0.0, 1.0))
 	energy_vignette.visible = _energy_intensity > 0.004
 	if energy_vignette.visible:
@@ -150,9 +153,11 @@ func _try_bind_player() -> void:
 		return
 	_player = Globals.player
 	_player.health_changed.connect(_on_health_changed)
+	_player.hunger_changed.connect(_on_hunger_changed)
 	_player.energy_changed.connect(_on_energy_changed)
 	_last_health = _player.health
 	_on_health_changed(_player.health, _player.max_health)
+	_on_hunger_changed(_player.hunger, 100.0)
 	_on_energy_changed(_player.energy, 100.0)
 	_last_health = _player.health
 
@@ -169,6 +174,11 @@ func _on_health_changed(current: float, maximum: float) -> void:
 	_health_hp = current
 	_health_frac = current / maxf(maximum, 1.0)
 	_set_bar(health_bar, health_label, "Health", current, maximum)
+
+
+func _on_hunger_changed(current: float, maximum: float) -> void:
+	_hunger_frac = current / maxf(maximum, 1.0)
+	_set_bar(hunger_bar, hunger_label, "Hunger", current, maximum)
 
 
 func _on_energy_changed(current: float, maximum: float) -> void:

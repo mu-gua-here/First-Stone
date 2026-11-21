@@ -1,5 +1,8 @@
 extends Node3D
 
+const COMPAT_ENVIRONMENT_PATH := "res://environments/compat-main-environment.tres"
+const NATIVE_ENVIRONMENT_PATH := "res://environments/native-main-environment.tres"
+
 @export var world_environment_node: WorldEnvironment
 
 # Underwater look = a camera-attached overlay (View/Camera/UnderwaterOverlay, shaders/underwater.gdshader).
@@ -18,10 +21,13 @@ var _camera_in_fluid := false
 var _camera_water_level := 0.0 # surface height above the camera, set by _query_camera_in_fluid()
 var _baseline_ambient_energy: float
 
-func _ready():
+func _enter_tree() -> void:
 	if world_environment_node == null:
-		world_environment_node = $WorldEnvironment
+		world_environment_node = get_node_or_null("WorldEnvironment") as WorldEnvironment
+	# Select the renderer-specific resource before child nodes such as DayNightCycle initialize.
 	_swap_environment_for_renderer()
+
+func _ready():
 	# Run after DayNightCycle (default process_priority 0) so whenever we
 	# read the environment's "current" values this frame, they're already
 	# this frame's fresh day/night numbers, not last frame's.
@@ -104,28 +110,16 @@ func _swap_environment_for_renderer() -> void:
 	# Compatibility ("gl_compatibility") and Forward+ ("forward_plus") render
 	# fog/lighting/glow differently enough that one Environment resource
 	# use different environment files for each
-	if world_environment_node == null or world_environment_node.environment == null:
+	if world_environment_node == null:
+		push_error("main.gd: WorldEnvironment node not found.")
 		return
-	if RenderingServer.get_current_rendering_method() != "gl_compatibility":
-		return
-
-	var native_env := world_environment_node.environment
-	var native_path := native_env.resource_path
-	if native_path.is_empty() or not native_path.contains("native-"):
-		push_warning("main.gd: on Compatibility renderer but current environment resource path (%s) doesn't follow the 'native-*' naming convention -- can't derive compat path, leaving as-is." % native_path)
+	var environment_path := COMPAT_ENVIRONMENT_PATH if RenderingServer.get_current_rendering_method() == "gl_compatibility" else NATIVE_ENVIRONMENT_PATH
+	var environment := ResourceLoader.load(environment_path) as Environment
+	if environment == null:
+		push_error("main.gd: failed to load renderer-specific environment at %s." % environment_path)
 		return
 
-	var compat_path := native_path.replace("native-", "compat-")
-	if not ResourceLoader.exists(compat_path):
-		push_warning("main.gd: expected compat environment at %s but it doesn't exist, leaving native environment active." % compat_path)
-		return
-
-	var compat_env := ResourceLoader.load(compat_path)
-	if compat_env == null or not (compat_env is Environment):
-		push_warning("main.gd: failed to load compat environment at %s, leaving native environment active." % compat_path)
-		return
-
-	world_environment_node.environment = compat_env
+	world_environment_node.environment = environment
 
 func _query_camera_in_fluid(camera: Camera3D) -> bool:
 	var space_state := get_world_3d().direct_space_state

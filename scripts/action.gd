@@ -11,7 +11,7 @@ class_name Action
 ## and instead pre-resolves the target itself before calling execute(). See
 ## PolicyEngine.execute() for how the two paths reconcile.
 
-enum Kind { ASSIGN_JOB, ASSIGN_HOUSING, ASSIGN_GATHER, ASSIGN_BUILD_TASK, ASSIGN_HAUL, EAT, WANDER }
+enum Kind { ASSIGN_JOB, ASSIGN_HOUSING, ASSIGN_GATHER, ASSIGN_BUILD_TASK, ASSIGN_HAUL, EAT, WANDER, REST }
 
 @export var kind: Kind
 @export var target_query: Condition  # how to find the building/node to assign *to* (policy path)
@@ -53,4 +53,10 @@ static func new_eat() -> Action:
 static func new_wander() -> Action:
 	var a := Action.new()
 	a.kind = Kind.WANDER
+	return a
+
+## Walk to a shelter and rest there (see Citizen.start_resting). Used by the "Sleep in a shelter at night" tradition.
+static func new_rest() -> Action:
+	var a := Action.new()
+	a.kind = Kind.REST
 	return a

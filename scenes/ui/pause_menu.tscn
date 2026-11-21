@@ -1,0 +1,424 @@
+[gd_scene format=3 uid="uid://cqq5ba34jv1wp"]
+
+[ext_resource type="Script" uid="uid://xn14pkijvum5" path="res://scripts/pause_menu.gd" id="1_0lmf7"]
+[ext_resource type="Theme" uid="uid://bosdj5jpedo6o" path="res://lilita-text.tres" id="2_f6eus"]
+
+[sub_resource type="ButtonGroup" id="ButtonGroup_quality"]
+
+[sub_resource type="ButtonGroup" id="ButtonGroup_fps"]
+
+[node name="PauseMenu" type="Node" unique_id=1295153958]
+process_mode = 3
+script = ExtResource("1_0lmf7")
+
+[node name="MenuLayer" type="CanvasLayer" parent="." unique_id=206061405]
+unique_name_in_owner = true
+process_mode = 3
+layer = 10
+
+[node name="Dim" type="ColorRect" parent="MenuLayer" unique_id=1102046548]
+unique_name_in_owner = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.55)
+
+[node name="Center" type="CenterContainer" parent="MenuLayer" unique_id=744848107]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="MenuLayer/Center" unique_id=1544675366]
+layout_mode = 2
+theme = ExtResource("2_f6eus")
+
+[node name="Margin" type="MarginContainer" parent="MenuLayer/Center/Panel" unique_id=1721068089]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="MainPage" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin" unique_id=2011672495]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(380, 0)
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=2091017723]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "Paused"
+horizontal_alignment = 1
+
+[node name="ResumeButton" type="Button" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=1226766600]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Resume"
+
+[node name="SettingsButton" type="Button" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=552897677]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Settings"
+
+[node name="SaveButton" type="Button" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=309863279]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Save game"
+
+[node name="LoadButton" type="Button" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=1477693083]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Load game"
+
+[node name="QuitButton" type="Button" parent="MenuLayer/Center/Panel/Margin/MainPage" unique_id=124869999]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Quit game"
+
+[node name="SettingsPage" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin" unique_id=1381720349]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(620, 0)
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage" unique_id=1709132032]
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "Settings"
+horizontal_alignment = 1
+
+[node name="Tabs" type="TabContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage" unique_id=1944746295]
+custom_minimum_size = Vector2(0, 340)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+current_tab = 0
+
+[node name="Audio" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs" unique_id=1990923237]
+layout_mode = 2
+theme_override_constants/separation = 16
+metadata/_tab_index = 0
+
+[node name="MasterRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio" unique_id=1894172001]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MasterRow" unique_id=360654478]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Master"
+
+[node name="MasterSlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MasterRow" unique_id=443804648]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="MasterValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MasterRow" unique_id=1755646183]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "100%"
+horizontal_alignment = 2
+
+[node name="EffectsRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio" unique_id=1600357904]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/EffectsRow" unique_id=1622626287]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Effects"
+
+[node name="EffectsSlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/EffectsRow" unique_id=1013044531]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="EffectsValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/EffectsRow" unique_id=1331715648]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "100%"
+horizontal_alignment = 2
+
+[node name="MusicRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio" unique_id=451347211]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MusicRow" unique_id=78636647]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Music"
+
+[node name="MusicSlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MusicRow" unique_id=844104941]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.01
+value = 1.0
+
+[node name="MusicValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Audio/MusicRow" unique_id=1099440958]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "100%"
+horizontal_alignment = 2
+
+[node name="Graphics" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs" unique_id=1356238458]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 10
+metadata/_tab_index = 1
+
+[node name="QualityTitle" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=1195787760]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Quality"
+
+[node name="QualityRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=649632714]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="QualityAuto" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/QualityRow" unique_id=1910389042]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_group = SubResource("ButtonGroup_quality")
+text = "Auto"
+
+[node name="QualityLow" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/QualityRow" unique_id=279567805]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_group = SubResource("ButtonGroup_quality")
+text = "Low"
+
+[node name="QualityMedium" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/QualityRow" unique_id=772205029]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_group = SubResource("ButtonGroup_quality")
+text = "Medium"
+
+[node name="QualityHigh" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/QualityRow" unique_id=2119831516]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_pressed = true
+button_group = SubResource("ButtonGroup_quality")
+text = "High"
+
+[node name="QualityUltra" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/QualityRow" unique_id=1161945128]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_group = SubResource("ButtonGroup_quality")
+text = "Ultra"
+
+[node name="QualityInfo" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=967076610]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 92)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.85, 0.9, 1)
+theme_override_font_sizes/font_size = 18
+text = "Shadows with 4 splits, full resolution and anti-aliasing on scene geometry."
+autowrap_mode = 3
+
+[node name="FpsTitle" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=834930817]
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Frame rate cap"
+
+[node name="FpsRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=1869758921]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Fps30" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/FpsRow" unique_id=1323545326]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_group = SubResource("ButtonGroup_fps")
+text = "30 FPS"
+
+[node name="Fps60" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/FpsRow" unique_id=1154914844]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+toggle_mode = true
+button_pressed = true
+button_group = SubResource("ButtonGroup_fps")
+text = "60 FPS"
+
+[node name="VsyncCheck" type="CheckButton" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=280356186]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+button_pressed = true
+text = "VSync"
+
+[node name="FovRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics" unique_id=1665960030]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/FovRow" unique_id=1262897218]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Field of view"
+
+[node name="FovSlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/FovRow" unique_id=957237505]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+min_value = 50.0
+max_value = 110.0
+value = 75.0
+
+[node name="FovValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Graphics/FovRow" unique_id=841150429]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "75"
+horizontal_alignment = 2
+
+[node name="Interface" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs" unique_id=75112305]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 16
+metadata/_tab_index = 2
+
+[node name="UiScaleRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface" unique_id=2144495405]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/UiScaleRow" unique_id=631059609]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "UI scale"
+
+[node name="UiScaleSlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/UiScaleRow" unique_id=1548602351]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+min_value = 0.5
+max_value = 2.0
+step = 0.05
+value = 1.0
+
+[node name="UiScaleValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/UiScaleRow" unique_id=1127566059]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "1.00x"
+horizontal_alignment = 2
+
+[node name="SensitivityRow" type="HBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface" unique_id=1700965044]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Label" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/SensitivityRow" unique_id=848753120]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Camera speed"
+
+[node name="SensitivitySlider" type="HSlider" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/SensitivityRow" unique_id=645527258]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 28)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+min_value = 0.1
+max_value = 3.0
+step = 0.05
+value = 1.0
+
+[node name="SensitivityValue" type="Label" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface/SensitivityRow" unique_id=184904293]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "1.00x"
+horizontal_alignment = 2
+
+[node name="FpsCheck" type="CheckButton" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface" unique_id=1651441421]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Show FPS counter"
+
+[node name="FullscreenCheck" type="CheckButton" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Interface" unique_id=273022479]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Fullscreen"
+
+[node name="Controls" type="VBoxContainer" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs" unique_id=1240943818]
+visible = false
+layout_mode = 2
+metadata/_tab_index = 3
+
+[node name="ControlsText" type="RichTextLabel" parent="MenuLayer/Center/Panel/Margin/SettingsPage/Tabs/Controls" unique_id=208235775]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 260)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/normal_font_size = 20
+theme_override_font_sizes/bold_font_size = 20
+bbcode_enabled = true
+
+[node name="BackButton" type="Button" parent="MenuLayer/Center/Panel/Margin/SettingsPage" unique_id=1861111389]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Back"

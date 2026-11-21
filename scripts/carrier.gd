@@ -21,6 +21,7 @@ class_name Carrier
 ## Health, falling and dying are shared by everyone who extends Carrier (Player and Citizen), so they
 ## obey the same rules. What differs is only what dying DOES: see _on_death().
 signal health_changed(current: float, max: float)
+signal hunger_changed(current: float, max: float)
 signal energy_changed(current: float, max: float)
 signal died
 
@@ -31,6 +32,8 @@ signal died
 
 @export_category("Mechanics")
 @export var hunger_dmg := 0.01
+## Health lost per second while exhausted (energy below exhausted_below), same pace as starving
+@export var exhaustion_dmg := 0.01
 ## Landing (or splashing down) faster than this (m/s) hurts. Damage = excess speed, halved in water.
 @export var fall_dmg_threshold := 14.0
 ## Falling below this world height kills the carrier (it fell out of the world).
@@ -38,9 +41,11 @@ signal died
 
 @export_category("Physiology")
 @export var max_health: float = 100.0
+@export var max_hunger: float = 100.0
 @export var max_energy: float = 100.0
 @export var heal_rate := 0.1
-@export var heal_energy := 0.05
+## Hunger spent per second while the body heals itself
+@export var heal_hunger := 0.05
 
 ## Assign to health directly -- the setter clamps, emits health_changed and handles death.
 @export_range(0.0, 100.0) var health: float = 100.0:
@@ -49,7 +54,20 @@ signal died
 		health_changed.emit(health, max_health)
 		if health <= 0.0:
 			_die()
-## Assign to energy directly -- the setter clamps and emits energy_changed.
+## Hunger: how well fed the body is (100 = full, 0 = starving). Eating raises it; living burns it (metabolism) and healing
+## costs some. Assign to it directly -- the setter clamps and emits hunger_changed.
+@export_range(0.0, 100.0) var hunger: float = 100.0:
+	set(value):
+		var clamped := clampf(value, 0.0, 100.0)
+		if clamped == hunger:
+			return
+		hunger = clamped
+		hunger_changed.emit(hunger, 100.0)
+
+@export_category("Energy Usage")
+## Energy: how physically rested the body is (100 = fresh, 0 = worn out). Effort spends it (walking, swimming, jumping,
+## gathering, building) and it only comes back by resting in a shelter (see is_resting). Assign to it directly -- the
+## setter clamps and emits energy_changed.
 @export_range(0.0, 100.0) var energy: float = 100.0:
 	set(value):
 		var clamped := clampf(value, 0.0, 100.0)
@@ -58,13 +76,27 @@ signal died
 		energy = clamped
 		energy_changed.emit(energy, 100.0)
 
-@export var move_energy := 0.5
-@export var swim_energy := 0.1
-@export var metabolism: float = 0.01
+## Energy spent per second walking on land / swimming
+@export var move_energy := 0.03
+@export var swim_energy := 0.15
+## Energy spent per jump
+@export var jump_energy := 0.3
+## Hunger burned per second just by being alive
+@export var metabolism := 0.01
+## Energy regained per second while is_resting
+@export var rest_recharge := 0.3
+## Below this much hunger the body starts to hurt (hunger_dmg), and below this much energy too (exhaustion_dmg)
+@export var starving_below := 30.0
+@export var exhausted_below := 30.0
 
-## Below this much health & energy the player starts to slow down (and jump / swim weaker)
+## Below this much health, hunger or energy the carrier starts to slow down (and jump / swim weaker). They stack.
 @export var slow_below_health := 50.0
+@export var slow_below_hunger := 50.0
 @export var slow_below_energy := 50.0
+
+## True while lying down in a shelter: the Citizen at night, the Player standing still beside one. Energy only recharges
+## while this is true, so with no shelter nobody ever recovers.
+var is_resting := false
 
 ## True from the moment health hits 0 until (for the player only) the respawn.
 var is_dead := false
@@ -138,6 +170,42 @@ func _die() -> void:
 func _on_death() -> void:
 	queue_free()
 
+# --- Vitals (shared by the Player and Citizens) ---------------------------------
+#   hunger: food. Burns with time, healing costs some, eating refills it, starving hurts.
+#   energy: physical tiredness. Effort spends it, only resting in a shelter refills it, exhaustion hurts.
+
+## The body's slow processes, called once per physics frame by Player and Citizen. Spending energy on effort is NOT done
+## here: whatever does the work (walking, gathering, building, jumping) pays for it where it happens.
+func _tick_vitals(delta: float) -> void:
+	hunger -= metabolism * delta
+	if is_resting:
+		energy += rest_recharge * delta
+	# The body only mends itself when it is fed and not worn out; mending costs hunger
+	if health < max_health and hunger > starving_below and energy > exhausted_below:
+		health += heal_rate * delta
+		hunger -= heal_hunger * delta
+	if hunger < starving_below:
+		health -= hunger_dmg * delta
+	if energy < exhausted_below:
+		health -= exhaustion_dmg * delta
+
+## Energy cost of getting around this frame: more for swimming than for walking
+func _spend_travel_energy(delta: float, in_water: bool) -> void:
+	energy -= (swim_energy if in_water else move_energy) * delta
+
+## 1.0 when healthy, fed and rested, falling towards 0.2 as health, hunger or energy run low. The three stack, so being
+## hurt AND hungry AND worn out slows a carrier far more than any one alone.
+func _vitality_mult() -> float:
+	var health_mult := clampf(smoothstep(0.0, 1.0, health / maxf(slow_below_health, 0.001)), 0.2, 1.0)
+	var hunger_mult := clampf(smoothstep(0.0, 1.0, hunger / maxf(slow_below_hunger, 0.001)), 0.2, 1.0)
+	var energy_mult := clampf(smoothstep(0.0, 1.0, energy / maxf(slow_below_energy, 0.001)), 0.2, 1.0)
+	return health_mult * hunger_mult * energy_mult
+
+## Speed multiplier from what is in the carrier's arms: 1.0 by default; Player and Citizen override it so that holding a log
+## slows them down (ResourceProp.LOG_CARRY_SPEED_MULT)
+func _carry_speed_mult() -> float:
+	return 1.0
+
 # Call once per physics frame. Falling out of the world is death.
 func _check_out_of_world() -> void:
 	if global_position.y < kill_height:
@@ -162,10 +230,14 @@ func _swim_toward_surface(delta: float) -> void:
 # A carrier squeezed between bodies loses and regains contact every few frames, and each regain used to count as a fresh hit that
 # also pops them upwards: the velocities piled up and the next landing hurt. So impacts are rate-limited.
 const PUSH_COOLDOWN_MS := 250
+# Right after spawning, citizens can overlap (a stacked spawn, a baby next to its parent) and the depenetration shoves would
+# fling them away, so impacts are ignored for the first moments of life.
+const SPAWN_PUSH_GRACE_MS := 1500
+var _created_ms := Time.get_ticks_msec()
 var _last_push_ms := -PUSH_COOLDOWN_MS
 func receive_push(dv: Vector3) -> void:
 	var now := Time.get_ticks_msec()
-	if now - _last_push_ms < PUSH_COOLDOWN_MS:
+	if now - _last_push_ms < PUSH_COOLDOWN_MS or now - _created_ms < SPAWN_PUSH_GRACE_MS:
 		return
 	_last_push_ms = now
 	velocity += dv.limit_length(MAX_IMPACT_SPEED)

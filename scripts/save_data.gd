@@ -20,6 +20,11 @@ const CURRENT_VERSION := 1
 @export var structure_positions := PackedVector3Array()
 @export var structure_yaws := PackedFloat32Array()
 
+# --- Zones: which tiles are designated as what (stockpile, gathering...), by zone NAME ---
+@export var zones_saved := false # false in saves from before zones existed: the starting zones are kept
+@export var zone_cells := PackedVector3Array() # (x, y, z) of each zoned tile
+@export var zone_names := PackedStringArray() # ZoneMap item name, parallel to zone_cells
+
 # --- Loose resource props (logs, fruit): one entry per prop ---
 @export var prop_types := PackedStringArray()
 @export var prop_positions := PackedVector3Array()

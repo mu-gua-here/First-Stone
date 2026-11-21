@@ -4,7 +4,6 @@ extends Node
 @export var id: String = "%06d" % randi_range(0, 999999)
 @export var citizen_name: String = NameGenerator.generate_name()
 @export var age: int = randi_range(2, 100)
-@export var energy: float = 100.0
 @export var job: String = ""
 @export var job_task: int = Structure.JobTask.NONE # what the job makes them do automatically, see Structure.JobTask
 @export var workplace_id: String = "" # Builder.placed_structures id of the workplace employing them
