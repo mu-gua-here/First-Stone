@@ -1,7 +1,7 @@
 extends Node3D
 
-const COMPAT_ENVIRONMENT_PATH := "res://environments/compat-main-environment.tres"
-const NATIVE_ENVIRONMENT_PATH := "res://environments/native-main-environment.tres"
+@export var COMPAT_ENVIRONMENT: Environment
+@export var NATIVE_ENVIRONMENT: Environment
 
 @export var world_environment_node: WorldEnvironment
 
@@ -71,7 +71,7 @@ func _process(_delta: float) -> void:
 			mat.set_shader_parameter("water_level", _camera_water_level)
 
 # --- Debug perf A/B (debug builds only). Stand where fps drops, press one key at a time:
-#   F1 3D render scale 1.0/0.75/0.5   F2 shadow splits 1/2/4   F3 MSAA on/off
+#   F9 3D render scale 1.0/0.75/0.5   F10 shadow splits 1/2/4   F11 MSAA on/off
 #   F5 print fps once a second
 var _dbg_scale_i := 0
 var _dbg_fps_log := false
@@ -86,21 +86,23 @@ func _dbg_fps_tick(delta: float) -> void:
 		print("[perf] %d fps (%.1f ms)" % [Engine.get_frames_per_second(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if not OS.is_debug_build() or not (event is InputEventKey and event.pressed and not event.echo):
 		return
 	var vp := get_viewport()
 	match event.keycode:
-		KEY_F1:
+		KEY_F9:
 			_dbg_scale_i = (_dbg_scale_i + 1) % 3
 			vp.scaling_3d_scale = [1.0, 0.75, 0.5][_dbg_scale_i]
 			print("[perf] 3D scale = ", vp.scaling_3d_scale)
-		KEY_F2:
+		KEY_F10:
 			var sun := get_node_or_null("Sun") as DirectionalLight3D
 			if sun:
 				# ORTHOGONAL(1 split) -> PARALLEL_2_SPLITS -> PARALLEL_4_SPLITS
 				sun.directional_shadow_mode = ((int(sun.directional_shadow_mode) + 1) % 3) as DirectionalLight3D.ShadowMode
 				print("[perf] shadow mode = ", ["1 split", "2 splits", "4 splits"][int(sun.directional_shadow_mode)])
-		KEY_F3:
+		KEY_F11:
 			vp.msaa_3d = Viewport.MSAA_2X if vp.msaa_3d == Viewport.MSAA_DISABLED else Viewport.MSAA_DISABLED
 			print("[perf] MSAA = ", "2x" if vp.msaa_3d == Viewport.MSAA_2X else "off")
 		KEY_F5:
@@ -113,10 +115,12 @@ func _swap_environment_for_renderer() -> void:
 	if world_environment_node == null:
 		push_error("main.gd: WorldEnvironment node not found.")
 		return
-	var environment_path := COMPAT_ENVIRONMENT_PATH if RenderingServer.get_current_rendering_method() == "gl_compatibility" else NATIVE_ENVIRONMENT_PATH
-	var environment := ResourceLoader.load(environment_path) as Environment
+	if COMPAT_ENVIRONMENT == null or NATIVE_ENVIRONMENT == null:
+		push_error("main.gd: COMPAT_ENVIRONMENT or NATIVE_ENVIRONMENT not set.")
+		return
+	var environment := COMPAT_ENVIRONMENT if RenderingServer.get_current_rendering_method() == "gl_compatibility" else NATIVE_ENVIRONMENT 
 	if environment == null:
-		push_error("main.gd: failed to load renderer-specific environment at %s." % environment_path)
+		push_error("main.gd: failed to load renderer-specific environment.")
 		return
 
 	world_environment_node.environment = environment

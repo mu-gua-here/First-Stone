@@ -114,6 +114,8 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if clock_label and event.is_action_pressed("toggle_clock"):
 		clock_label.visible = not clock_label.visible
 		_last_clock_minute = -1 # refresh the text right away when it comes back

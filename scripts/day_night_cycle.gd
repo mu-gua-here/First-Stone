@@ -11,7 +11,7 @@ class_name DayNightCycle
 
 @export_group("General")
 ## How many real-world seconds a full in-game day takes.
-@export var day_length_seconds: float = 600.0
+@export var day_length_seconds: float = 1200.0
 @export_range(0.0, 1.0) var time_of_day: float = 0.25
 ## Where the cycle starts, 0..1
 @export_range(0.0, 1.0) var start_time: float = 0.25
@@ -90,10 +90,12 @@ class_name DayNightCycle
 # fighting theirs -- e.g. while the camera is underwater.
 var suppress_fog := false
 
-## Ultra graphics preset (pause_menu.gd, Forward+ only): SSR, SSAO and volumetric fog (with light shafts from the sun) replace the
+## Ultra graphics preset (pause_menu.gd, Forward+ only): SSAO and volumetric fog (with light shafts from the sun) replace the
 ## depth fog, and the ocean shader gets sharper sky reflections. Screen-space reflections can't touch a transparent surface,
 ## so the water's reflections come from its own shader (reflection_boost).
 var fancy_lighting := false
+## Bloom/glow, kept independent of fancy SSAO/volumetric lighting so the graphics preset can disable it on Low/Medium.
+var glow_enabled := true
 ## Cloud layer (High and Ultra, set by pause_menu.gd): the visible clouds and their reflection in the ocean
 var clouds_enabled := false
 
@@ -146,11 +148,10 @@ func _update_clouds(delta: float) -> void:
 
 func _apply_fancy_lighting(env: Environment, day_pct: float) -> void:
 	var supports_fancy_lighting := RenderingServer.get_current_rendering_method() == "forward_plus" and not OS.has_feature("web")
+	env.glow_enabled = glow_enabled
 	if fancy_lighting and supports_fancy_lighting:
 		_fancy_applied = true
 		env.fog_enabled = false
-		if not env.ssr_enabled:
-			env.ssr_enabled = true
 		if not env.ssao_enabled:
 			env.ssao_enabled = true
 		if not env.volumetric_fog_enabled:
@@ -160,10 +161,9 @@ func _apply_fancy_lighting(env: Environment, day_pct: float) -> void:
 		var glow := lerpf(night_volumetric_emission_strength, noon_volumetric_emission_strength, day_pct)
 		env.volumetric_fog_emission = Color(env.fog_light_color.r * glow, env.fog_light_color.g * glow, env.fog_light_color.b * glow)
 		env.volumetric_fog_length = maxf(noon_fog_depth_end * fog_distance_scale / _fog_mult, 64.0)
-	elif _fancy_applied:
+	else:
 		_fancy_applied = false # back to the authored depth fog
 		env.fog_enabled = true
-		env.ssr_enabled = false
 		env.ssao_enabled = false
 		if supports_fancy_lighting:
 			env.volumetric_fog_enabled = false

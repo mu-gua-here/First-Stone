@@ -268,7 +268,9 @@ func release(throw_velocity: Vector3 = Vector3.ZERO) -> void:
 	scale = Vector3.ONE # in case it was dropped mid-hop
 	collision_layer = _held_layer
 	collision_mask = _held_mask
+	freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	freeze = false
+	sleeping = false
 	linear_velocity = throw_velocity
 
 ## The wood this log stood for went into a building: shrink away and disappear (on the server and every client)

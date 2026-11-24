@@ -45,7 +45,7 @@ var _stock_sent := ""
 var _props_sent := {} # prop name -> [position, rotation] as last sent
 var _carry_facing := {} # peer id -> the way that player last walked (carried fruit is held in front of them)
 var _carry_last_pos := {} # peer id -> where their avatar was when the facing was last updated
-const GRAB_RANGE := 3.0 # how close a client must be to a prop to grab it (a little looser than reach, for latency)
+const GRAB_RANGE := 15.0 # how close a client must be to a prop to grab it (a little looser than reach, for latency)
 var _held_by := {} # peer id -> Array of names of the props that client is carrying (oldest first, up to ResourceProp.MAX_CARRY)
 
 # --- client side ---
@@ -321,6 +321,11 @@ func req_assign(kind: int, citizen_id: String, target_id: String) -> void:
 	if _online():
 		_req_assign.rpc_id(1, kind, citizen_id, target_id)
 
+## "send this citizen to that spot": the player clicked the ground with a citizen selected
+func req_go_to(citizen_id: String, world_position: Vector3) -> void:
+	if _online():
+		_req_go_to.rpc_id(1, citizen_id, world_position)
+
 
 # --- Handlers (run on the server) ---
 
@@ -412,6 +417,20 @@ func _req_assign(kind: int, citizen_id: String, target_id: String) -> void:
 			Action.Kind.ASSIGN_JOB:
 				if builder.buildings.has(target_id):
 					ok = PolicyEngine.execute(Action.new_assign_job(), citizen, builder.buildings[target_id])
+	answer_assign.rpc_id(sender, ok, PolicyEngine.last_failure)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _req_go_to(citizen_id: String, world_position: Vector3) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var ok := false
+	if world_position.is_finite():
+		for c in builder.citizens:
+			if is_instance_valid(c) and c.data != null and c.data.id == citizen_id:
+				ok = PolicyEngine.execute(Action.new_go_to_position(), c, world_position)
+				break
 	answer_assign.rpc_id(sender, ok, PolicyEngine.last_failure)
 
 

@@ -70,6 +70,7 @@ func _ready() -> void:
 	if _is_server:
 		name_dialog.visible = false
 		_start_server()
+		_play_intro.call_deferred() # no name dialog to wait for: the server runs the fly-in straight away
 	else:
 		_ask_for_name()
 
@@ -153,7 +154,16 @@ func _on_name_confirmed(_text: String = "") -> void:
 	name_edit.release_focus()
 	DisplayServer.virtual_keyboard_hide()
 	get_tree().paused = false
+	_play_intro()
 	_connect()
+
+
+# Camera fly-in from above the huts into the game (view.gd, IntroCamTransition). Runs for the client once the name is
+# confirmed, and straight away on the server (which has no name dialog), otherwise View would sit on the opening shot.
+func _play_intro() -> void:
+	var view_node := get_tree().get_first_node_in_group("view")
+	if view_node != null and view_node.has_method("play_intro"):
+		view_node.call("play_intro")
 
 
 static func sanitize_name(text: String) -> String:

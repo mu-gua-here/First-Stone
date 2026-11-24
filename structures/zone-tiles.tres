@@ -2,42 +2,38 @@
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_log"]
 transparency = 1
-shading_mode = 0
-albedo_color = Color(0.47058824, 0.25882354, 0.2, 0.44313726)
+albedo_color = Color(0.47058824, 0.25882354, 0.2, 0.39215687)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_log"]
 material = SubResource("StandardMaterial3D_log")
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_food"]
 transparency = 1
-shading_mode = 0
-albedo_color = Color(0.9372549, 0, 0.6745098, 0.2)
+albedo_color = Color(0.9372549, 0, 0.6745098, 0.39215687)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_food"]
 material = SubResource("StandardMaterial3D_food")
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_gather"]
 transparency = 1
-shading_mode = 0
-albedo_color = Color(0.3, 0.6, 0.95, 0.5)
+albedo_color = Color(0.3019608, 0.6, 0.9490196, 0.39215687)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_gather"]
 material = SubResource("StandardMaterial3D_gather")
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_build"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_lmama"]
 transparency = 1
-shading_mode = 0
-albedo_color = Color(0.9490196, 0.8784314, 0.4, 0.2627451)
+albedo_color = Color(0.8038021, 0, 0.1485956, 0.39215687)
 
-[sub_resource type="PlaneMesh" id="PlaneMesh_build"]
-material = SubResource("StandardMaterial3D_build")
+[sub_resource type="PlaneMesh" id="PlaneMesh_8teoy"]
+material = SubResource("StandardMaterial3D_lmama")
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_firq5"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7mu7h"]
 transparency = 1
-albedo_color = Color(1, 0, 0, 0.61960787)
+albedo_color = Color(0.66040343, 0.5236126, 1.92523e-07, 0.39215687)
 
-[sub_resource type="PlaneMesh" id="PlaneMesh_ku7rt"]
-material = SubResource("StandardMaterial3D_firq5")
+[sub_resource type="PlaneMesh" id="PlaneMesh_g2jsp"]
+material = SubResource("StandardMaterial3D_7mu7h")
 
 [resource]
 item/0/name = "log_stockpile"
@@ -61,15 +57,15 @@ item/2/mesh_cast_shadow = 0
 item/2/shapes = []
 item/2/navigation_mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 item/2/navigation_layers = 1
-item/3/name = "build_area"
-item/3/mesh = SubResource("PlaneMesh_build")
+item/3/name = "restricted"
+item/3/mesh = SubResource("PlaneMesh_8teoy")
 item/3/mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
-item/3/mesh_cast_shadow = 0
+item/3/mesh_cast_shadow = 1
 item/3/shapes = []
 item/3/navigation_mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 item/3/navigation_layers = 1
-item/4/name = "restricted"
-item/4/mesh = SubResource("PlaneMesh_ku7rt")
+item/4/name = "build_area"
+item/4/mesh = SubResource("PlaneMesh_g2jsp")
 item/4/mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 item/4/mesh_cast_shadow = 1
 item/4/shapes = []

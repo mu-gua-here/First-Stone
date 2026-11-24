@@ -46,6 +46,7 @@ const _CITIZEN_FIELDS := {
 	"busy": "_get_citizen_busy",                 # chopping, building, pushing a log, eating or resting
 	"wander_ready": "_get_citizen_wander_ready", # the idle timer ran out
 	"task": "_get_citizen_task",                 # "idle", "gathering", "building", "pushing", "hauling", "eating", "resting"
+	"zone": "_get_citizen_zone",                 # the zone the citizen stands in: a ZoneMap item name ("restricted", "gathering"...) or "none"
 }
 
 const _BUILDING_FIELDS := {
@@ -179,6 +180,12 @@ func _get_citizen_rest_ready(citizen): return citizen.rest_ready()
 func _get_citizen_busy(citizen): return citizen.is_busy()
 func _get_citizen_wander_ready(citizen): return citizen.wander_ready()
 func _get_citizen_task(citizen): return citizen.task_name()
+func _get_citizen_zone(citizen):
+	var b = _builder()
+	if b == null:
+		return null
+	var item := ZoneMap.item_name(b.zone_at(citizen.global_position))
+	return item if item != "" else "none"
 
 # BuildingInstance doesn't carry a back-reference to its Structure, so these
 # getters need the owning Builder to resolve structure_index -> Structure.
@@ -231,10 +238,10 @@ const UNREACHABLE_PAUSE := 4.0 # seconds a citizen stands still after being sent
 func execute(action: Action, subject, resolved_target = null) -> bool:
 	last_failure = ""
 	var ok := _dispatch(action, subject, resolved_target)
-	# A task the player handed a citizen by hand: ordinary policies leave that citizen alone until it is done
-	# (survival policies such as eating still run). See Policy.survival and think().
+	# A task the player handed a citizen by hand: ordinary policies leave that citizen alone until it is done.
+	# Innate needs are handled by Citizen before the policy engine runs. See Policy.survival and think().
 	if ok and resolved_target != null and _is_citizen(subject) and action != null \
-			and action.kind in [Action.Kind.ASSIGN_GATHER, Action.Kind.ASSIGN_BUILD_TASK, Action.Kind.ASSIGN_HAUL]:
+			and action.kind in [Action.Kind.ASSIGN_GATHER, Action.Kind.ASSIGN_BUILD_TASK, Action.Kind.ASSIGN_HAUL, Action.Kind.GO_TO_POSITION]:
 		subject.manual_task = true
 	return ok
 
@@ -263,17 +270,17 @@ func _dispatch(action: Action, subject, resolved_target = null) -> bool:
 		Action.Kind.ASSIGN_HAUL:
 			return _execute_assign_haul(b, subject, resolved_target)
 
-		Action.Kind.EAT:
-			return _is_citizen(subject) and subject.has_method("start_eating") and subject.start_eating()
+		Action.Kind.EAT, Action.Kind.WANDER, Action.Kind.REST:
+			return false # Legacy action IDs remain loadable, but needs and idle wandering are innate behavior.
 
-		Action.Kind.WANDER:
-			if _is_citizen(subject) and subject.has_method("start_wander"):
-				subject.start_wander()
-				return true
-			return false
+		Action.Kind.GO_TO_ZONE:
+			return _is_citizen(subject) and subject.has_method("start_go_to_zone") and subject.start_go_to_zone(action.zone)
 
-		Action.Kind.REST:
-			return _is_citizen(subject) and subject.has_method("start_resting") and subject.start_resting()
+		Action.Kind.GO_TO_POSITION:
+			return _execute_go_to_position(subject, resolved_target)
+
+		Action.Kind.ALLOW, Action.Kind.FORBID:
+			return false # permissions are read by is_permitted(); they are never "run"
 
 	push_warning("PolicyEngine.execute: unhandled Action.Kind %s" % action.kind)
 	return false
@@ -374,6 +381,13 @@ func _execute_assign_gather(b, citizen, resolved_target = null) -> bool:
 		return true
 	return false
 
+## Manual order: walk to the world position the player clicked (resolved_target is that Vector3). Refused, with a reason
+## the HUD shows, if the spot is off limits or the citizen can't walk there.
+func _execute_go_to_position(citizen, resolved_target) -> bool:
+	if not _is_citizen(citizen) or not resolved_target is Vector3 or not citizen.has_method("start_go_to_position"):
+		return false
+	return citizen.start_go_to_position(resolved_target)
+
 ## Standing task: push loose logs to the stockpile. resolved_target, when given, is the name of the log the
 ## player clicked (it is hauled first); without one the citizen starts with the nearest loose log.
 ## Always succeeds -- a hauler with no logs to move just waits for the choppers to make some.
@@ -391,57 +405,93 @@ func _execute_assign_haul(_b, citizen, resolved_target = null) -> bool:
 
 var policies: Array[Policy] = []
 
+## Emitted whenever the rule book changes (a rule added, removed, reordered, reset or edited in the policy editor).
+## The save system can listen to this to know the rules need saving.
+signal policies_changed
+
+## Which tiers of fields the player may use in new conditions (see PolicyCatalog). Research / administration buildings
+## call unlock_tier() as the society advances; rules that already use a locked field keep running.
+var unlocked_tiers: Array[String] = [PolicyCatalog.TIER_PHYSICAL, PolicyCatalog.TIER_SITUATION]
+
 func _ready() -> void:
 	_install_default_traditions()
 
 func add_policy(policy: Policy) -> void:
 	policies.append(policy)
 	policies.sort_custom(func(a: Policy, b: Policy) -> bool: return a.priority > b.priority)
+	policies_changed.emit()
 
-## The settlement's starting rules ("Default Traditions" in the design doc): baseline survival and idling that every
-## new civilisation begins with, so the editor is never a blank canvas.
+func unlock_tier(tier: String) -> void:
+	if not tier in unlocked_tiers:
+		unlocked_tiers.append(tier)
+		policies_changed.emit()
+
+func is_field_unlocked(field: String) -> bool:
+	return PolicyCatalog.field_tier(field) in unlocked_tiers
+
+## Public read of a subject's field (the editor's Data Hub and live preview use this)
+func get_field(subject, field: String):
+	return _get_field(subject, field)
+
+## Default Traditions can be switched off but never deleted
+func remove_policy(policy: Policy) -> void:
+	if policy == null or policy.is_default:
+		return
+	policies.erase(policy)
+	policies_changed.emit()
+
+## direction -1 = runs earlier (higher priority), +1 = runs later. Priorities are only an ordering, so they are renumbered.
+func move_policy(policy: Policy, direction: int) -> void:
+	var i := policies.find(policy)
+	var j := i + direction
+	if i < 0 or j < 0 or j >= policies.size():
+		return
+	policies.remove_at(i)
+	policies.insert(j, policy)
+	var n := policies.size()
+	for k in n:
+		policies[k].priority = (n - k) * 10
+	policies_changed.emit()
+
+## Throws away every rule (including the player's own) and restores the starting traditions
+func reset_to_default_traditions() -> void:
+	policies.clear()
+	_install_default_traditions()
+	policies_changed.emit()
+
+## The settlement's starting rules ("Default Traditions" in the design doc): customs every new civilisation begins with, so the
+## editor is never a blank canvas. Hunger, exhaustion and bedtime are NOT traditions: they are innate (see Citizen._update_needs and
+## Player), so what is left here is how the community arranges itself.
 func _install_default_traditions() -> void:
-	var eat_when: Array[Condition] = [
-		Condition.leaf("hungry", "==", true),
-		Condition.leaf("food_available", "==", true),
-		Condition.leaf("eat_ready", "==", true),
-	]
-	var eat := Policy.new()
-	eat.policy_name = "Eat when hungry"
-	eat.priority = 100
-	eat.survival = true
-	eat.is_default = true
-	eat.condition = Condition.op_and(eat_when)
-	eat.action = Action.new_eat()
-	add_policy(eat)
-
-	# Night is for sleeping: head for a shelter and rest there until morning (energy only recharges that way).
-	# Below eating (a starving citizen eats first) but a survival rule, so it also overrides a task handed out by hand.
-	var sleep_when: Array[Condition] = [
-		Condition.leaf("is_night", "==", true),
-		Condition.leaf("shelter_available", "==", true),
-		Condition.leaf("rest_ready", "==", true),
-	]
-	var sleep := Policy.new()
-	sleep.policy_name = "Sleep in a shelter at night"
-	sleep.priority = 90
-	sleep.survival = true
-	sleep.is_default = true
-	sleep.condition = Condition.op_and(sleep_when)
-	sleep.action = Action.new_rest()
-	add_policy(sleep)
-
-	var wander_when: Array[Condition] = [
+	# Gather at the gathering area: idle citizens (not working, eating, sleeping or out for a stroll) walk to the designated
+	# gathering area, the blue zone in front of the notice board, and stay there. Without a gathering zone (or once they stand in
+	# it) this has nothing to do and they amble about on their own. A tradition like any other: the player can edit or disable it.
+	var gather_when: Array[Condition] = [
 		Condition.leaf("busy", "==", false),
-		Condition.leaf("wander_ready", "==", true),
+		Condition.leaf("zone", "!=", ZoneMap.item_name(ZoneMap.Type.GATHERING)),
 	]
-	var wander := Policy.new()
-	wander.policy_name = "Wander when idle"
-	wander.priority = 0
-	wander.is_default = true
-	wander.condition = Condition.op_and(wander_when)
-	wander.action = Action.new_wander()
-	add_policy(wander)
+	var gather := Policy.new()
+	gather.policy_name = "Gather at the gathering area"
+	gather.priority = 10
+	gather.is_default = true
+	gather.only_when_idle = true
+	gather.condition = Condition.op_and(gather_when)
+	gather.actions.append(Action.new_go_to_zone(ZoneMap.Type.GATHERING))
+	add_policy(gather)
+
+
+
+	# Restricted areas: nobody enters, chops, picks fruit or builds there. A permission policy (it never "runs"), so it
+	# sits above the gathering tradition only to be ordered against the player's own rules: put an ALLOW for some citizens
+	# above it and they are let in. The player can switch it off but not delete it.
+	var restricted := Policy.new()
+	restricted.policy_name = "Restricted areas are off limits"
+	restricted.priority = 95
+	restricted.is_default = true
+	restricted.condition = Condition.always_true()
+	for activity in [Action.Activity.ENTER, Action.Activity.CHOP, Action.Activity.PICK_FRUIT, Action.Activity.BUILD]:
+		restricted.actions.append(Action.new_forbid(activity, ZoneMap.Type.RESTRICTED))
+	add_policy(restricted)
 
 ## One decision for one citizen: the first enabled policy (highest priority first) whose condition matches and whose
 ## action applies is run. While the citizen is on a task the player gave them by hand, only survival policies
@@ -455,11 +505,53 @@ func think(citizen, survival_only: bool = false) -> bool:
 	for policy in policies:
 		if not policy.enabled or ((citizen.manual_task or survival_only) and not policy.survival):
 			continue
-		if evaluate(policy.condition, citizen) and _dispatch(policy.action, citizen):
+		if policy.only_when_idle and citizen.is_busy():
+			continue
+		if evaluate(policy.condition, citizen) and _run_behaviour(policy, citizen):
 			ran = true
 			break
 	last_failure = saved_failure
 	return ran
+
+## Tries a policy's behaviour actions in order and stops at the first one that applies (permission actions are skipped:
+## see is_permitted). Returns true if one ran.
+func _run_behaviour(policy: Policy, citizen) -> bool:
+	for a in policy.actions:
+		if a == null or a.is_permission():
+			continue
+		if _dispatch(a, citizen):
+			return true
+	return false
+
+## May this citizen do `activity` (an Action.Activity) at world position `pos`? Only the zone on that tile matters, so a tile
+## with no zone is always fine. Policies are read from the highest priority down; the first enabled one whose condition
+## matches the citizen AND that mentions this activity in this zone decides it (a FORBID beats an ALLOW inside one policy).
+## No policy saying anything = allowed. Used by Builder / Citizen before choosing what to chop, pick, build or walk to.
+func is_permitted(citizen, activity: int, pos: Vector3) -> bool:
+	var b = _builder()
+	if b == null or citizen == null:
+		return true
+	var zone: int = b.zone_at(pos)
+	if zone == ZoneMap.Type.NONE:
+		return true
+	for policy in policies:
+		if not policy.enabled:
+			continue
+		var allowed := false
+		var forbidden := false
+		for a in policy.actions:
+			if a == null or not a.is_permission() or a.activity != activity or a.zone != zone:
+				continue
+			if a.kind == Action.Kind.FORBID:
+				forbidden = true
+			else:
+				allowed = true
+		if not forbidden and not allowed:
+			continue # this policy says nothing about it: don't even evaluate its condition
+		if not evaluate(policy.condition, citizen):
+			continue
+		return not forbidden
+	return true
 
 ## resolved_target, when given, is a specific construction site's String id
 ## (see Builder.construction_sites) the caller already picked (manual click
@@ -474,7 +566,7 @@ func _execute_assign_build_task(b, citizen, resolved_target = null) -> bool:
 	if resolved_target is String and resolved_target != b.NO_ID:
 		site_id = resolved_target
 	else:
-		site_id = b.get_nearest_construction_site(citizen.global_position)
+		site_id = b.get_nearest_construction_site(citizen.global_position, citizen)
 		if site_id == b.NO_ID:
 			return false # nothing under construction right now
 

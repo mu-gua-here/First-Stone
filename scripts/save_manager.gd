@@ -16,6 +16,15 @@ const BACKUP_PATH := "user://savegame.bak.tres"
 const TEMP_PATH := "user://savegame.tmp.tres"
 const CHUNK := 200 # things handled per frame, so the progress bar can update and Cancel can be pressed
 
+## Sanity limits for reading a save. A file that breaks them is treated as damaged (the backup is tried next)
+const MAX_FILE_BYTES := 64 * 1024 * 1024
+const MAX_STRUCTURES := 50000
+const MAX_PROPS := 50000
+const MAX_ZONE_CELLS := 500000
+const MAX_COORD := 10000.0 # nothing real sits further than this from the origin
+const MAX_PROP_AMOUNT := 1000
+const MAX_TYPE_NAME_LENGTH := 32
+
 ## Survives reload_current_scene(): tells the fresh scene to apply the save once the Builder has started up
 static var _load_pending := false
 
@@ -40,6 +49,8 @@ func _ready() -> void:
 		_apply_saved_game()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if _busy or Globals.online_client:
 		return
 	if event.is_action_pressed("save"):
@@ -110,11 +121,17 @@ func save_game() -> void:
 		return
 	# The write itself is one blocking call: the label above is already on screen when it starts
 	var err := ResourceSaver.save(data, TEMP_PATH)
+	if err == OK and not _file_has_content(TEMP_PATH):
+		err = ERR_FILE_CORRUPT # reported OK but wrote nothing (disk full, web storage quota...)
 	if err != OK:
+		DirAccess.remove_absolute(TEMP_PATH)
 		_end()
 		_notice("Save failed", "Could not write the save file (error %d)." % err, 3.0)
 		return
-	_replace_save_file()
+	if not _replace_save_file():
+		_end()
+		_notice("Save failed", "Could not replace the old save file.", 3.0)
+		return
 	_set_progress(1.0, "Saved")
 	cancel_button.visible = false
 	await get_tree().create_timer(0.6).timeout
@@ -156,12 +173,26 @@ func _capture_props(data: SaveData) -> bool:
 				return false
 	return true
 
-func _replace_save_file() -> void:
-	if FileAccess.file_exists(SAVE_PATH):
+## Swaps the finished temp file in. Returns false (leaving the previous save in place) if a step fails
+func _replace_save_file() -> bool:
+	var had_old := FileAccess.file_exists(SAVE_PATH)
+	if had_old:
 		if FileAccess.file_exists(BACKUP_PATH):
 			DirAccess.remove_absolute(BACKUP_PATH)
-		DirAccess.rename_absolute(SAVE_PATH, BACKUP_PATH)
-	DirAccess.rename_absolute(TEMP_PATH, SAVE_PATH)
+		if DirAccess.rename_absolute(SAVE_PATH, BACKUP_PATH) != OK:
+			DirAccess.remove_absolute(TEMP_PATH)
+			return false
+	if DirAccess.rename_absolute(TEMP_PATH, SAVE_PATH) != OK:
+		if had_old:
+			DirAccess.rename_absolute(BACKUP_PATH, SAVE_PATH) # put the previous save back
+		return false
+	return true
+
+func _file_has_content(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var f := FileAccess.open(path, FileAccess.READ)
+	return f != null and f.get_length() > 0
 
 # --- Load ----------------------------------------------------------------------
 
@@ -178,10 +209,34 @@ func _read_save() -> SaveData:
 	for path in [SAVE_PATH, BACKUP_PATH]:
 		if not FileAccess.file_exists(path):
 			continue
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f == null:
+			continue
+		var size := f.get_length()
+		f.close()
+		if size <= 0 or size > MAX_FILE_BYTES:
+			push_warning("SaveManager: %s is empty or too large (%d bytes), skipping it." % [path, size])
+			continue
 		var data := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as SaveData
-		if data != null:
+		if data != null and _is_sane(data):
 			return _migrate(data)
+		push_warning("SaveManager: %s is damaged, trying the next save." % path)
 	return null
+
+## False if the file's shape is wrong: parallel arrays of different lengths, or absurd counts
+func _is_sane(d: SaveData) -> bool:
+	var s := d.structure_names.size()
+	if s > MAX_STRUCTURES or d.structure_positions.size() != s or d.structure_yaws.size() != s:
+		return false
+	var p := d.prop_types.size()
+	if p > MAX_PROPS or d.prop_positions.size() != p or d.prop_rotations.size() != p or d.prop_amounts.size() != p:
+		return false
+	var z := d.zone_cells.size()
+	return z <= MAX_ZONE_CELLS and d.zone_names.size() == z
+
+## True for a finite vector that is not absurdly far from the origin (NaN/inf/huge values corrupt physics and the grid)
+static func _vec_ok(v: Vector3) -> bool:
+	return v.is_finite() and absf(v.x) <= MAX_COORD and absf(v.y) <= MAX_COORD and absf(v.z) <= MAX_COORD
 
 ## Upgrades an older save to the current layout. Nothing to do yet: when a field changes meaning, bump
 ## SaveData.CURRENT_VERSION and convert it here (new fields just take their defaults).
@@ -212,7 +267,13 @@ func _apply_saved_game() -> void:
 		_end()
 		return
 	if data.zones_saved:
-		b.restore_zones(data.zone_cells, data.zone_names)
+		var cells := PackedVector3Array()
+		var names := PackedStringArray()
+		for i in data.zone_cells.size():
+			if _vec_ok(data.zone_cells[i]):
+				cells.append(data.zone_cells[i])
+				names.append(data.zone_names[i])
+		b.restore_zones(cells, names)
 	if not await _apply_props(b, data):
 		_end()
 		return
@@ -230,6 +291,9 @@ func _apply_buildings(b: Builder, data: SaveData) -> bool:
 		if index < 0:
 			missing += 1 # a structure that no longer exists in this build
 			continue
+		if not _vec_ok(data.structure_positions[i]) or not is_finite(data.structure_yaws[i]):
+			missing += 1 # corrupt entry
+			continue
 		b.restore_structure(index, data.structure_positions[i], data.structure_yaws[i])
 		if i % CHUNK == CHUNK - 1:
 			if await _step(0.1 + 0.3 * float(i) / total, "Buildings... (%d / %d)" % [i + 1, total]):
@@ -241,7 +305,10 @@ func _apply_buildings(b: Builder, data: SaveData) -> bool:
 func _apply_props(b: Builder, data: SaveData) -> bool:
 	var total := data.prop_types.size()
 	for i in total:
-		b.restore_prop(data.prop_types[i], data.prop_amounts[i], data.prop_positions[i], data.prop_rotations[i])
+		var type := data.prop_types[i]
+		if type == "" or type.length() > MAX_TYPE_NAME_LENGTH or not _vec_ok(data.prop_positions[i]) or not _vec_ok(data.prop_rotations[i]):
+			continue # corrupt entry
+		b.restore_prop(type, clampi(data.prop_amounts[i], 1, MAX_PROP_AMOUNT), data.prop_positions[i], data.prop_rotations[i])
 		if i % CHUNK == CHUNK - 1:
 			if await _step(0.4 + 0.55 * float(i) / total, "Logs and food... (%d / %d)" % [i + 1, total]):
 				return false

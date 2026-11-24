@@ -34,6 +34,8 @@ func _exit_tree() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if event.is_echo():
 		return
 	if event.is_action_pressed("time_faster"):

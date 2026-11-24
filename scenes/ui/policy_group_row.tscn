@@ -1,0 +1,76 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/policy_group_row.gd" id="1_group"]
+
+[node name="PolicyGroupRow" type="HBoxContainer"]
+theme_override_constants/separation = 8
+script = ExtResource("1_group")
+
+[node name="Bar" type="ColorRect" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(5, 0)
+layout_mode = 2
+color = Color(1, 0.62, 0.369, 1)
+
+[node name="Body" type="VBoxContainer" parent="."]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="Header" type="HBoxContainer" parent="Body"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NotToggle" type="Button" parent="Body/Header"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+tooltip_text = "Click to flip the whole group. YES: the conditions below have to hold. NOT: they must not."
+theme_override_font_sizes/font_size = 18
+toggle_mode = true
+text = "YES"
+
+[node name="ModeOption" type="OptionButton" parent="Body/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+
+[node name="Spacer" type="Control" parent="Body/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RemoveButton" type="Button" parent="Body/Header"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Remove this whole group"
+theme_override_font_sizes/font_size = 18
+text = "Remove group"
+
+[node name="EmptyNote" type="Label" parent="Body"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "No conditions here: the rule applies to everyone."
+
+[node name="Items" type="VBoxContainer" parent="Body"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Footer" type="HBoxContainer" parent="Body"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="AddConditionButton" type="Button" parent="Body/Footer"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "+ Condition"
+
+[node name="AddGroupButton" type="Button" parent="Body/Footer"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Start a bracket with its own AND / OR / NOT"
+theme_override_font_sizes/font_size = 18
+text = "+ Group"

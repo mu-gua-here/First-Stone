@@ -100,6 +100,8 @@ func _exit_tree() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if Engine.is_editor_hint() or not OS.is_debug_build():
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F7:

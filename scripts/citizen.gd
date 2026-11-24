@@ -125,7 +125,7 @@ var _chain_origin := Vector3.INF # where the tree a chopper just felled stood (I
 var _thriving_days := 0.0
 var _last_birth_clock := -1.0
 
-# Eating -- the "food distribution" default tradition. A hungry citizen (hunger below Builder.hungry_below) drops what
+# Eating -- an innate need, not a policy. A hungry citizen (hunger below Builder.hungry_below) with food in stock drops what
 # they are doing, walks to the stockpile and eats until Builder.eat_until, then goes back to what they were doing.
 var is_eating: bool = false
 const EAT_BITE_INTERVAL := 0.8 # seconds between bites at the stockpile
@@ -133,21 +133,23 @@ const EAT_GIVE_UP_TIME := 25.0 # seconds of walking to the stockpile before givi
 const EAT_RETRY_DELAY := 20.0 # how long a citizen who gave up leaves the food alone
 var _eat_resume_hint := "" # set by _after_push so a bite between two logs resumes pushing afterwards
 
-# Policies -- what a citizen does is decided by PolicyEngine.think() (the rule book: default traditions today, the
-# player's own rules later); this script only knows HOW to do each thing (start_eating, start_wander, ...).
+# Policies -- what a citizen does ABOUT THEIR NEEDS is innate (_update_needs: pass out, eat, sleep at night) and
+# always comes first. What they do beyond that is decided by PolicyEngine.think() (traditions and the player's own rules), and
+# only when no policy has anything for them to do do they amble about (start_wander). This script knows HOW to do each thing.
 const POLICY_INTERVAL := 0.5 # how often the citizen asks the policies what to do
 var _policy_timer := randf() * POLICY_INTERVAL # staggered so the whole village does not think on the same frame
-## true while the citizen is on a task the player gave them by hand: ordinary policies leave them alone until it is
-## finished (survival ones, like eating, still run). Set by PolicyEngine.execute(), cleared in _update_policies().
+## true while the citizen is on a task the player gave them by hand: policies leave them alone until it is
+## finished (their innate needs, like eating, still run). Set by PolicyEngine.execute(), cleared in _update_policies().
 var manual_task: bool = false
 var _eat_retry_timer := 0.0
 var _eat_bite_timer := 0.0
 var _eat_elapsed := 0.0
 var _eat_resume := "" # what to go back to afterwards: "build", "gather", "push", "rest" or "" (nothing, they were idle)
 
-# Resting -- the "Sleep in a shelter at night" default tradition. At night a citizen picks a shelter (the home they were
-# assigned if any, otherwise a random one), walks there and rests until morning. Resting (Carrier.is_resting) is the ONLY
-# way energy recharges, so a settlement with no shelter has worn-out citizens who slowly lose health.
+# Resting -- an innate need, not a policy. At night a citizen picks a shelter (the home they were
+# assigned if any, otherwise a random one), walks there and sleeps until morning. Sleeping (Carrier.is_resting) recharges
+# energy fastest; a citizen who is merely idle recharges it slowly (Carrier.idle_recharge), so a settlement with no shelter
+# has citizens who recover only a little between jobs. One who runs completely dry passes out where they stand (_collapse).
 var is_heading_to_rest := false # walking to the shelter (is_resting takes over once there)
 const REST_GIVE_UP_TIME := 60.0 # seconds of walking before giving up (an exhausted citizen is slow)
 const REST_RETRY_DELAY := 20.0 # how long a citizen who gave up leaves the shelters alone
@@ -161,6 +163,26 @@ const UNREACHABLE_RETRY_TIME := 60.0
 var _unreachable_targets: Dictionary = {}
 var _unreachable_time := 0.0
 var _stand_still_timer := 0.0 # > 0: stand where we are (an assignment was refused), wandering resumes afterwards
+
+# Walking to a spot the player clicked while this citizen was selected (Action GO_TO_POSITION). Ends on arrival, on giving up
+# (GO_TO_TIMEOUT), or when anything else takes over (a survival policy such as eating, or another order).
+var is_going_to_position := false
+const GO_TO_REACH := 1.0 # flat metres from the clicked spot that count as arrived
+const GO_TO_TIMEOUT := 60.0 # seconds before giving up on a spot that can't be reached after all
+var _go_target := Vector3.ZERO
+var _go_elapsed := 0.0
+var is_going_to_zone := false
+var _go_zone := -1
+var _go_zone_elapsed := 0.0
+var _go_zone_retry_timer := 0.0
+var _failed_go_zone := -1
+var _initial_navigation_pending := false
+
+# Ambling about (innate): the fallback when no policy has anything for an idle citizen to do. It remains idle for policy
+# eligibility, so a matching rule can take over without waiting for the stroll to finish.
+var is_wandering := false
+const WANDER_TIMEOUT := 40.0
+var _wander_elapsed := 0.0
 
 func _init() -> void:
 	kill_height = -10.0 # citizens die this far below the world (the player's is Carrier's default)
@@ -191,8 +213,9 @@ func _ready():
 			global_position = net_position
 		return
 	
-	# call_deferred only defers the CALL
-	_request_initial_wander()
+	# Spawners set global_position after add_child(), so choose the first target only after that has happened.
+	_initial_navigation_pending = true
+	call_deferred("_request_initial_wander")
 
 func _request_initial_wander() -> void:
 	# If the NavigationRegion3D is still registering its polygons with the server around the same
@@ -204,6 +227,7 @@ func _request_initial_wander() -> void:
 		if not is_instance_valid(self):
 			return
 	set_new_destination(_wander_target(100.0))
+	_initial_navigation_pending = false
 
 func _exit_tree():
 	_drop_carried() # never leave fruit frozen in mid-air
@@ -240,6 +264,9 @@ func _physics_process(delta):
 		_refresh_housing_status()
 	
 	_update_policies(delta)
+	_update_going_to_position(delta)
+	_update_going_to_zone(delta)
+	_update_wandering(delta)
 	_update_eating(delta)
 	_update_resting(delta)
 	_update_gathering(delta)
@@ -267,7 +294,9 @@ func _physics_process(delta):
 	actual_speed = BASE_SPEED + (100 - data.happiness) * 0.01
 	nav_agent.max_speed = actual_speed
 	
-	if data.happiness < 0.1:
+	if collapsed:
+		is_chasing_player = false
+	elif data.happiness < 0.1:
 		is_chasing_player = true
 	elif data.happiness > 10.0:
 		is_chasing_player = false
@@ -286,19 +315,19 @@ func _physics_process(delta):
 
 	# One navigation query trigger per frame: is_navigation_finished() / is_target_reachable() / get_next_path_position()
 	# all run update_navigation() (the path query) internally, so ask once, and never before the navmesh has synced.
-	var nav_ready := NavigationServer3D.map_get_iteration_id(nav_agent.get_navigation_map()) != 0
+	var nav_ready := _navigation_ready() and not collapsed
 	var nav_finished: bool = true if not nav_ready else nav_agent.is_navigation_finished()
 	
 	# Wander timer (skipped while actively gathering, building, pushing, eating or resting)
 	_stand_still_timer = maxf(_stand_still_timer - delta, 0.0)
-	if not is_gathering and not is_building and not is_pushing and not is_eating and not is_heading_to_rest and not is_resting:
+	if not is_gathering and not is_building and not is_pushing and not is_eating and not is_heading_to_rest and not is_resting and not is_going_to_position and not is_going_to_zone:
 		wander_timer -= delta
 		if is_on_floor() and wander_timer > 0:
 			if hunger > 0.0:
 				velocity.y = BOUNCE_HEIGHT
 		else:
 			wander_timer = randf_range(0, 2) * (100 - data.happiness)
-			idle_timer -= delta # when it runs out, the "Wander when idle" tradition sends them off (start_wander)
+			idle_timer -= delta # when it runs out, the innate idle behavior starts a stroll
 	else:
 		# Working: the walk to the tree / site / prop used to have NO hop at all (only wandering did), which
 		# looked like the citizen had frozen. Hop while travelling, stand still once at the work spot.
@@ -346,7 +375,9 @@ func _physics_process(delta):
 	if wanted.length() > 0.0:
 		_spend_travel_energy(delta, in_fluid) # walking tires, swimming more so
 	
-	_tick_vitals(delta) # hunger burns, healing costs hunger, starving / exhaustion hurt, resting recharges energy (carrier.gd)
+	# Walking, working, shoving or carrying is activity; anything else is idle and slowly recharges energy (Carrier.is_active)
+	is_active = wanted.length() > 0.0 or is_gathering or is_building or is_pushing or is_going_to_position or is_going_to_zone or is_wandering or not _carried.is_empty()
+	_tick_vitals(delta) # hunger burns, healing costs hunger, starving / exhaustion hurt, sleeping (fast) or idling (slowly) recharges energy (carrier.gd)
 	
 	_before_slide()
 	var fall_speed := -velocity.y # captured before move_and_slide() zeroes it on landing
@@ -388,7 +419,7 @@ func _refresh_housing_status() -> void:
 	# something via CitizenSelector -> PolicyEngine (or a future policy).
 
 func _start_gathering() -> void:
-	var id = builder.get_nearest_gatherable(global_position, gather_filter, _unreachable_targets)
+	var id = builder.get_nearest_gatherable(global_position, gather_filter, _unreachable_targets, self)
 	if id == NO_ID:
 		return
 	_start_gathering_at(id)
@@ -401,6 +432,8 @@ func _start_gathering_at(id: String) -> void:
 	is_hauling = false # an explicit tree assignment replaces a hauling task
 	gather_target_id = id
 	is_gathering = true
+	is_going_to_position = false
+	is_going_to_zone = false
 	# Trees are hand-placed in main.tscn at y = 4 (origin height), which is nowhere near the navmesh, so the
 	# agent called them unreachable (target_desired_height). Aim at the closest navmesh point instead.
 	var tree_pos: Vector3 = builder.get_structure_position(id)
@@ -434,7 +467,7 @@ func _update_gathering(delta: float) -> void:
 	var target_pos = builder.get_structure_position(gather_target_id)
 	var target_world_pos = Vector3(target_pos.x, global_position.y, target_pos.z)
 	var close_enough = global_position.distance_to(target_world_pos) <= builder.get_gather_reach(gather_target_id)
-	if gather_debug and not close_enough:
+	if gather_debug and not close_enough and _navigation_ready():
 		_debug_gather_timer -= delta
 		if _debug_gather_timer <= 0.0:
 			_debug_gather_timer = 1.0
@@ -442,7 +475,7 @@ func _update_gathering(delta: float) -> void:
 				name, global_position, nav_agent.target_position, nav_agent.get_final_position(), nav_agent.is_navigation_finished(),
 				nav_agent.is_target_reachable(), Vector2(global_position.x - target_pos.x, global_position.z - target_pos.z).length(),
 				nav_agent.get_next_path_position(), _wanted_velocity, velocity, energy])
-	if not nav_agent.is_navigation_finished() and not close_enough:
+	if not close_enough and (not _navigation_ready() or not nav_agent.is_navigation_finished()):
 		return
 	
 	# Arrived -- contribute labor toward the shared, persisted chop progress.
@@ -468,9 +501,9 @@ func _update_gathering(delta: float) -> void:
 # (see _update_hauling).
 func _after_push(skip_eating := false) -> void:
 	if not skip_eating:
-		# Between two logs is a natural moment to stop for a bite: ask the survival policies ("Eat when hungry")
+		# Between two logs is a natural moment to stop for a bite
 		_eat_resume_hint = "push"
-		var ate := PolicyEngine.think(self, true) and is_eating
+		var ate := _wants_to_eat() and start_eating()
 		_eat_resume_hint = ""
 		if ate:
 			return
@@ -499,6 +532,8 @@ func _nearest_pushable_prop(only_small: bool, only_logs := false) -> RigidBody3D
 	for prop in get_tree().get_nodes_in_group("resource_prop"):
 		if not is_instance_valid(prop) or prop.collected:
 			continue # already piled at the stockpile -- nothing left to push
+		if prop is ResourceProp and not (prop as ResourceProp).can_be_grabbed():
+			continue # still held, collected, or flying onto the pile
 		if prop.held:
 			continue # somebody is carrying it
 		if not _handles_resource(String(prop.get_meta("resource_type", ""))):
@@ -556,7 +591,7 @@ func _handles_resource(resource_type: String) -> bool:
 func _pick_from_bush(delta: float) -> bool:
 	if not _handles_resource("food") or _fruit_leg_time >= FRUIT_LEG_TIMEOUT:
 		return false
-	var bush: Gatherable = builder.nearest_pickable_bush(global_position, BUSH_SEEK_RADIUS)
+	var bush: Gatherable = builder.nearest_pickable_bush(global_position, BUSH_SEEK_RADIUS, self)
 	if bush == null:
 		_bush_pick_timer = 0.0
 		return false
@@ -600,10 +635,11 @@ func _update_fruit_run(delta: float) -> void:
 				push_repath_timer = PUSH_REPATH_INTERVAL
 				set_new_destination(push_target.global_position)
 			if Builder.flat_distance(global_position, push_target.global_position) <= FRUIT_GRAB_REACH:
-				push_target.grab()
-				_carried.append(push_target)
-				push_target = null
-				_fruit_leg_time = 0.0
+				if push_target is ResourceProp and (push_target as ResourceProp).can_be_grabbed():
+					(push_target as ResourceProp).grab()
+					_carried.append(push_target)
+					push_target = null
+					_fruit_leg_time = 0.0
 			elif _fruit_leg_time >= FRUIT_LEG_TIMEOUT:
 				_ignored_props[push_target.get_instance_id()] = Time.get_ticks_msec() / 1000.0 + PUSH_IGNORE_TIME
 				push_target = null
@@ -736,6 +772,8 @@ func _push_destination() -> Vector3:
 # "" the nearest one does. Called by PolicyEngine for ASSIGN_HAUL.
 func _start_hauling(prop_name: String = "") -> void:
 	is_hauling = true
+	is_going_to_position = false
+	is_going_to_zone = false
 	is_gathering = false # leave the tree
 	is_building = false
 	is_pushing = false
@@ -765,7 +803,7 @@ func _update_eating(delta: float) -> void:
 		return
 	if not is_eating:
 		_eat_retry_timer = maxf(_eat_retry_timer - delta, 0.0)
-		return # whether to start eating is the "Eat when hungry" tradition's call (PolicyEngine.think -> start_eating)
+		return # whether to start eating is an innate need (_update_needs -> start_eating)
 	_eat_elapsed += delta
 	if not builder.has_food():
 		_stop_eating(5.0) # somebody ate the last of it
@@ -783,14 +821,27 @@ func _update_eating(delta: float) -> void:
 	if hunger >= builder.eat_until:
 		_stop_eating(0.0)
 
-## Action EAT: drop what they are doing, walk to the stockpile and eat until full, then go back to it. Whether they
-## should is decided by the policies (hungry, food in stock, not sulking), so this only checks that food exists.
+## Drop what they are doing, walk to the stockpile and eat until full, then resume what can be resumed.
 func start_eating() -> bool:
-	if is_eating or builder == null or not builder.has_food():
+	if is_eating or collapsed or builder == null or hunger >= builder.hungry_below or not builder.has_food():
 		return false
-	_eat_resume = _eat_resume_hint if _eat_resume_hint != "" else ("rest" if (is_resting or is_heading_to_rest) else ("build" if is_building else ("gather" if is_gathering else "")))
+	if _eat_resume_hint != "":
+		_eat_resume = _eat_resume_hint
+	elif is_resting or is_heading_to_rest:
+		_eat_resume = "rest"
+	elif is_building:
+		_eat_resume = "build"
+	elif is_gathering:
+		_eat_resume = "gather"
+	elif is_going_to_position:
+		_eat_resume = "go_to_position"
+	else:
+		_eat_resume = ""
 	is_resting = false # a hungry citizen gets up for a meal (and goes back to bed after, see _stop_eating)
+	is_wandering = false
 	is_heading_to_rest = false
+	is_going_to_position = false # the bite comes first; they do not resume the walk
+	is_going_to_zone = false
 	is_gathering = false
 	is_building = false # (the site keeps its builder slot; _stop_eating walks back to it)
 	is_eating = true
@@ -812,6 +863,10 @@ func _stop_eating(retry_delay: float) -> void:
 			_start_gathering()
 		"push":
 			_after_push(true)
+		"go_to_position":
+			is_going_to_position = true
+			_go_elapsed = 0.0
+			set_new_destination(_go_target)
 		"rest":
 			if builder.is_night():
 				start_resting() # still night: back to bed
@@ -819,6 +874,7 @@ func _stop_eating(retry_delay: float) -> void:
 # Begins walking to an already-assigned construction site
 func _start_building(site_id: String) -> void:
 	is_hauling = false # an explicit site assignment replaces a hauling task
+	is_going_to_position = false
 	build_target_id = site_id
 	is_building = true
 	set_new_destination(builder.construction_sites[site_id].position)
@@ -857,6 +913,9 @@ func set_new_destination(target: Vector3):
 		return # navmesh not synced yet: the policies ask again within half a second
 	nav_agent.target_position = NavigationServer3D.map_get_closest_point(map_rid, target)
 
+func _navigation_ready() -> bool:
+	return not _initial_navigation_pending and NavigationServer3D.map_get_iteration_id(nav_agent.get_navigation_map()) != 0
+
 # Safety net against a citizen being launched away (stacked spawn, a shove that piled up, a tumbling log): speed is capped,
 # and one that ends up away from the navmesh (off the island) stops asking for paths -- see _tick_off_navmesh().
 # It is NOT put back on land: it stays wherever it landed (and dies if it falls out of the world).
@@ -887,6 +946,7 @@ func _guard_runaway(delta: float) -> void:
 func _tick_off_navmesh(delta: float, in_fluid: bool) -> void:
 	_wanted_velocity = Vector3.ZERO
 	steer_horizontal(Vector3.ZERO, delta)
+	is_active = false
 	_tick_vitals(delta)
 	_before_slide()
 	var fall_speed := -velocity.y
@@ -903,7 +963,7 @@ func can_reach(pos: Vector3) -> bool:
 	if _off_navmesh:
 		return false
 	var map_rid:RID = nav_agent.get_navigation_map()
-	if NavigationServer3D.map_get_iteration_id(map_rid) == 0:
+	if not _navigation_ready():
 		return true # map not synced yet: can't tell, don't refuse
 	var goal := NavigationServer3D.map_get_closest_point(map_rid, pos)
 	var path := NavigationServer3D.map_get_path(map_rid, global_position, goal, true)
@@ -923,15 +983,19 @@ func stand_still(seconds: float) -> void:
 # Situation getters read by PolicyEngine's citizen fields, and the actions its default traditions run.
 
 func is_busy() -> bool:
-	return is_gathering or is_building or is_pushing or is_eating or is_heading_to_rest or is_resting
+	return is_gathering or is_building or is_pushing or is_eating or is_heading_to_rest or is_resting \
+			or is_going_to_position or is_going_to_zone
 
 func task_name() -> String:
 	if is_eating: return "eating"
+	if is_going_to_position: return "walking"
+	if is_going_to_zone: return "walking to zone"
 	if is_resting or is_heading_to_rest: return "resting"
 	if is_pushing: return "pushing"
 	if is_building: return "building"
 	if is_gathering: return "gathering"
 	if is_hauling: return "hauling"
+	if is_wandering: return "wandering"
 	return "idle"
 
 ## Not already eating, not in the middle of shoving a log (that is finished first), not sulking after giving up
@@ -941,13 +1005,12 @@ func eat_ready() -> bool:
 ## Not already in bed or on the way, not in the middle of shoving a log (that is finished first), not chasing the player,
 ## not sulking after failing to reach a shelter
 func rest_ready() -> bool:
-	return not is_resting and not is_heading_to_rest and not is_pushing and not is_chasing_player and _rest_retry_timer <= 0.0
+	return not is_resting and not is_heading_to_rest and not is_eating and not is_pushing \
+			and not is_chasing_player and _rest_retry_timer <= 0.0
 
-## Action REST: drop what they are doing and head for a shelter to sleep until morning. Which shelter: the home they were
-## assigned if any, otherwise a random one (Builder.pick_shelter). WHEN to sleep is the policies' call (night, a shelter
-## exists, not already resting), so this only checks that there is a shelter to go to.
+## At night, walk to the assigned shelter or a random shelter and sleep there until morning.
 func start_resting() -> bool:
-	if builder == null or is_resting or is_heading_to_rest:
+	if builder == null or is_resting or is_heading_to_rest or is_eating:
 		return false
 	var shelter_id: String = builder.pick_shelter(data.id)
 	if shelter_id == builder.NO_ID:
@@ -956,12 +1019,15 @@ func start_resting() -> bool:
 	_rest_elapsed = 0.0
 	is_gathering = false # (the job / the policies pick the work up again in the morning)
 	is_building = false
+	is_going_to_position = false
+	is_going_to_zone = false
 	is_heading_to_rest = true
 	set_new_destination(NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), builder.get_structure_position(shelter_id)))
 	return true
 
 func _stop_resting(retry_delay: float) -> void:
 	is_resting = false # (Carrier.is_resting: energy stops recharging)
+	collapsed = false
 	is_heading_to_rest = false
 	_rest_shelter_id = ""
 	_rest_retry_timer = retry_delay
@@ -970,9 +1036,16 @@ func _stop_resting(retry_delay: float) -> void:
 func _update_resting(delta: float) -> void:
 	if builder == null:
 		return
+	if collapsed:
+		# Passed out where they stood (see _collapse): out cold until rested enough, whatever the time of day. At night the
+		# sleep need then walks them to bed. A shelter right there makes the sleep as good as a bed.
+		sleeping_in_shelter = builder.is_near_shelter(global_position)
+		if energy >= collapse_wake:
+			_stop_resting(0.0)
+		return
 	if not is_heading_to_rest and not is_resting:
 		_rest_retry_timer = maxf(_rest_retry_timer - delta, 0.0)
-		return # whether to go to bed is the "Sleep in a shelter at night" tradition's call (PolicyEngine.think -> start_resting)
+		return # whether to go to bed is an innate need (_update_needs -> start_resting)
 	if not builder.is_night():
 		_stop_resting(0.0) # morning: get up
 		return
@@ -997,9 +1070,10 @@ func _update_resting(delta: float) -> void:
 	var shelter_pos: Vector3 = builder.get_structure_position(_rest_shelter_id)
 	# Arrived: close enough to the shelter, or as close as the navmesh lets them get (a walled-in hut)
 	if Builder.flat_distance(global_position, shelter_pos) <= builder.shelter_reach \
-			or (nav_agent.is_navigation_finished() and _rest_elapsed > 2.0):
+			or (_navigation_ready() and nav_agent.is_navigation_finished() and _rest_elapsed > 2.0):
 		is_heading_to_rest = false
 		is_resting = true
+		sleeping_in_shelter = true
 		set_new_destination(global_position) # stand still
 		return
 	if _rest_elapsed > REST_GIVE_UP_TIME:
@@ -1009,19 +1083,172 @@ func _update_resting(delta: float) -> void:
 func wander_ready() -> bool:
 	return idle_timer <= 0.0 and _stand_still_timer <= 0.0
 
-## Action WANDER
+## Amble off to a random spot when no policy or need has taken over.
 func start_wander() -> void:
 	set_new_destination(_wander_target(100.0))
+	is_going_to_zone = false
 	idle_timer = clamp(randf_range(0.0, data.happiness * 0.2), 5.0, 20.0)
+	is_wandering = true
+	_wander_elapsed = 0.0
+
+func _update_wandering(delta: float) -> void:
+	if not is_wandering:
+		return
+	_wander_elapsed += delta
+	if is_gathering or is_building or is_pushing or is_eating or is_heading_to_rest or is_resting or is_going_to_position or is_chasing_player:
+		is_wandering = false # something else took over
+		return
+	if (_wander_elapsed > 0.5 and _navigation_ready() and nav_agent.is_navigation_finished()) or _wander_elapsed > WANDER_TIMEOUT:
+		is_wandering = false
+
+## Action GO_TO_ZONE: walk to the nearest tile of `zone`. False (so the next action of the rule is tried) when nothing is
+## zoned that way, when the policies keep this citizen out of it, or when they are already standing in it.
+func start_go_to_zone(zone: int) -> bool:
+	if builder == null or not builder.zones.has_any(zone) or builder.zone_at(global_position) == zone:
+		return false
+	if is_going_to_zone and _go_zone == zone:
+		return true
+	if _go_zone_retry_timer > 0.0 and _failed_go_zone == zone:
+		return false
+	if not _navigation_ready():
+		return false
+	var spot: Vector3 = builder.nearest_zone_point(zone, global_position)
+	if not PolicyEngine.is_permitted(self, Action.Activity.ENTER, spot):
+		return false
+	is_wandering = false
+	is_going_to_position = false
+	is_going_to_zone = true
+	_go_zone = zone
+	_go_zone_elapsed = 0.0
+	set_new_destination(spot)
+	return true
+
+func _update_going_to_zone(delta: float) -> void:
+	_go_zone_retry_timer = maxf(_go_zone_retry_timer - delta, 0.0)
+	if not is_going_to_zone:
+		return
+	_go_zone_elapsed += delta
+	if is_gathering or is_building or is_pushing or is_eating or is_heading_to_rest or is_resting \
+			or is_going_to_position or is_chasing_player:
+		is_going_to_zone = false
+		return
+	if builder == null or not builder.zones.has_any(_go_zone) or builder.zone_at(global_position) == _go_zone:
+		is_going_to_zone = false
+		nav_agent.target_position = global_position
+		return
+	if _go_zone_elapsed > GO_TO_TIMEOUT:
+		is_going_to_zone = false
+		_failed_go_zone = _go_zone
+		_go_zone_retry_timer = UNREACHABLE_RETRY_TIME
+		nav_agent.target_position = global_position
+
+## Action GO_TO_POSITION: drop whatever they were doing and walk to a spot the player clicked. Refused (with the reason in
+## PolicyEngine.last_failure) if the policies keep this citizen out of that spot or the navmesh has no way there.
+func start_go_to_position(pos: Vector3) -> bool:
+	if builder == null:
+		return false
+	if collapsed:
+		PolicyEngine.last_failure = "They are out cold from exhaustion."
+		return false
+	if not PolicyEngine.is_permitted(self, Action.Activity.ENTER, pos):
+		PolicyEngine.last_failure = "That area is off limits."
+		return false
+	if not can_reach(pos):
+		PolicyEngine.last_failure = "That spot is unreachable."
+		return false
+	# Leave the current task (a log in the arms is dropped by _hold_carried once pushing stops; a site keeps its builder slot, like eating)
+	is_gathering = false
+	gather_target_id = NO_ID
+	is_building = false
+	is_pushing = false
+	push_target = null
+	is_hauling = false
+	is_going_to_zone = false
+	if is_resting or is_heading_to_rest:
+		_stop_resting(0.0)
+	_go_target = NavigationServer3D.map_get_closest_point(nav_agent.get_navigation_map(), pos)
+	_go_elapsed = 0.0
+	is_going_to_position = true
+	set_new_destination(_go_target)
+	return true
+
+func _update_going_to_position(delta: float) -> void:
+	if not is_going_to_position:
+		return
+	_go_elapsed += delta
+	if is_gathering or is_building or is_pushing or is_eating or is_heading_to_rest or is_resting:
+		is_going_to_position = false # something else took over
+		return
+	var arrived: bool = Builder.flat_distance(global_position, _go_target) <= GO_TO_REACH \
+			or (_go_elapsed > 0.5 and _navigation_ready() and nav_agent.is_navigation_finished()) # (not on the first frames: the path may not exist yet)
+	if arrived or _go_elapsed > GO_TO_TIMEOUT:
+		is_going_to_position = false
+		nav_agent.target_position = global_position # stand here; the idle timer decides when wandering resumes
+		idle_timer = clamp(randf_range(0.0, data.happiness * 0.2), 5.0, 20.0)
 
 func _update_policies(delta: float) -> void:
-	if manual_task and not (is_gathering or is_building or is_pushing or is_hauling or is_eating or is_heading_to_rest or is_resting):
+	if manual_task and not (is_gathering or is_building or is_pushing or is_hauling or is_eating or is_heading_to_rest or is_resting or is_going_to_position or is_going_to_zone):
 		manual_task = false # the task the player gave them is finished
 	_policy_timer -= delta
 	if _policy_timer > 0.0:
 		return
 	_policy_timer = POLICY_INTERVAL
-	PolicyEngine.think(self)
+	if _update_needs():
+		return # the body comes first: no policy gets to overrule hunger, exhaustion or bedtime
+	if PolicyEngine.think(self):
+		return
+	# No tradition or rule had anything for them to do: an idle citizen ambles about (innate, not a policy)
+	if not manual_task and not is_busy() and wander_ready():
+		start_wander()
+
+# --- Innate needs -------------------------------------------------------------
+# Not policies: every citizen does these whatever the player's rules say, and a task handed out by hand does not stop them.
+# In order of urgency: pass out when exhausted, eat when hungry, sleep at night.
+
+## hungry, food in stock, not already eating / shoving a log / sulking after giving up
+func _wants_to_eat() -> bool:
+	return builder != null and hunger < builder.hungry_below and builder.has_food() and eat_ready()
+
+## Returns true if a need just took over (or the citizen is out cold), so the policies sit this tick out.
+func _update_needs() -> bool:
+	if builder == null:
+		return false
+	if collapsed:
+		if energy < collapse_wake:
+			return true
+		_stop_resting(0.0)
+	if energy <= collapse_below:
+		_collapse()
+		return true
+	if is_eating:
+		return true
+	if _wants_to_eat() and start_eating():
+		return true
+	if is_resting or is_heading_to_rest:
+		return true
+	if builder.is_night() and not builder.shelter_ids().is_empty() and rest_ready():
+		return start_resting()
+	return false
+
+## Energy ran out: drop everything and pass out where they stand until energy is back above collapse_wake. Sleeping out in
+## the open recharges at Carrier.outdoor_sleep_mult of the rate in bed (the player's version lives in player.gd).
+func _collapse() -> void:
+	is_gathering = false
+	is_building = false
+	is_pushing = false
+	push_target = null
+	is_eating = false
+	_eat_resume = ""
+	is_going_to_position = false
+	is_going_to_zone = false
+	is_heading_to_rest = false
+	is_wandering = false
+	collapsed = true
+	is_resting = true
+	is_chasing_player = false
+	_wanted_velocity = Vector3.ZERO
+	sleeping_in_shelter = builder.is_near_shelter(global_position)
+	set_new_destination(global_position) # stand still
 
 # --- Jobs -------------------------------------------------------------------
 
@@ -1048,7 +1275,7 @@ func clear_job() -> void:
 func _update_job(delta: float) -> void:
 	if data.job == "" or builder == null:
 		return
-	if is_gathering or is_building or is_pushing or is_hauling or is_eating or is_heading_to_rest or is_resting:
+	if is_gathering or is_building or is_pushing or is_hauling or is_eating or is_heading_to_rest or is_resting or is_going_to_position:
 		return # (a hauler finds its own work, see _update_hauling)
 	_job_timer -= delta
 	if _job_timer > 0.0:
@@ -1084,7 +1311,16 @@ func _update_reproduction() -> void:
 
 # Wander targets used to be raw random points with no regard for whether the navmesh
 # actually covers that spot
+# A random spot to amble to. Spots the policies keep this citizen out of (a restricted zone) are re-rolled a few times.
 func _wander_target(nav_range: float) -> Vector3:
+	var target: Vector3 = _pick_wander_point(nav_range)
+	for i in 6:
+		if PolicyEngine.is_permitted(self, Action.Activity.ENTER, target):
+			break
+		target = _pick_wander_point(nav_range)
+	return target
+
+func _pick_wander_point(nav_range: float) -> Vector3:
 	var raw = global_position + Vector3(randf_range(-nav_range, nav_range), 0, randf_range(-nav_range, nav_range))
 	var map_rid = nav_agent.get_navigation_map()
 	# If map not synced yet, return raw (unsnapped) point

@@ -27,10 +27,11 @@ These are planned and not all of them are in the game yet. See `BUCKET_LIST.md` 
 | Key | Action |
 | --- | --- |
 | Mouse drag | Orbit the camera |
-| Esc | Release the mouse pointer |
-| Tab | Interact mode (build cursor) |
-| B | Return to building mode |
-| Backspace | Delete mode (from interact mode) |
+| Esc | Open / close the game menu |
+| Tab | Open the policy editor |
+| B | Enter / leave build mode |
+| Command+B | Demolish mode (while in build mode) |
+| Ctrl | Lock / free the mouse pointer |
 | E | Grab fruit and other small items |
 | Q | Drop carried items |
 

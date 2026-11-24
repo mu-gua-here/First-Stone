@@ -26,11 +26,15 @@ grow_vertical = 2
 color = Color(0, 0, 0, 0.55)
 
 [node name="Center" type="CenterContainer" parent="MenuLayer" unique_id=744848107]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
+unique_name_in_owner = true
+anchors_preset = -1
+anchor_right = 0.75000006
+anchor_bottom = 0.75000006
+offset_right = 287.99994
+offset_bottom = 161.99997
 grow_horizontal = 2
 grow_vertical = 2
+scale = Vector2(0.75, 0.75)
 mouse_filter = 2
 
 [node name="Panel" type="PanelContainer" parent="MenuLayer/Center" unique_id=1544675366]

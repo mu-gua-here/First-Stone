@@ -14,11 +14,31 @@ material = SubResource("ORMMaterial3D_2wyq8")
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_2tfuy"]
 
-[node name="Player" type="CharacterBody3D" unique_id=402418124 node_paths=PackedStringArray("nameplate", "body_mesh", "grab_hint")]
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_grabhint"]
+content_margin_left = 22.0
+content_margin_top = 8.0
+content_margin_right = 22.0
+content_margin_bottom = 8.0
+bg_color = Color(0.09, 0.07, 0.05, 0.78)
+border_width_left = 3
+border_width_top = 3
+border_width_right = 3
+border_width_bottom = 3
+border_color = Color(1, 0.84, 0.25, 1)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+shadow_color = Color(0, 0, 0, 0.45)
+shadow_size = 8
+shadow_offset = Vector2(0, 3)
+
+[node name="Player" type="CharacterBody3D" unique_id=402418124 node_paths=PackedStringArray("nameplate", "body_mesh", "grab_hint", "grab_hint_label")]
 script = ExtResource("1_3vyb7")
 nameplate = NodePath("Nameplate")
 body_mesh = NodePath("MeshInstance3D")
 grab_hint = NodePath("GrabHUD/GrabHint")
+grab_hint_label = NodePath("GrabHUD/GrabHint/Label")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=1348972503]
 mesh = SubResource("CapsuleMesh_og1vs")
@@ -30,24 +50,29 @@ shape = SubResource("CapsuleShape3D_2tfuy")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.35, 0)
 show_bars = false
 
-[node name="GrabHUD" type="CanvasLayer" parent="."]
+[node name="GrabHUD" type="CanvasLayer" parent="." unique_id=148516458]
 
-[node name="GrabHint" type="Label" parent="GrabHUD"]
+[node name="GrabHint" type="PanelContainer" parent="GrabHUD" unique_id=1025286653]
 anchors_preset = 7
 anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -250.0
-offset_top = -150.0
-offset_right = 250.0
-offset_bottom = -110.0
+offset_left = -50.5
+offset_top = -85.0
+offset_right = 50.5
+offset_bottom = -50.0
 grow_horizontal = 2
 grow_vertical = 0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_grabhint")
+
+[node name="Label" type="Label" parent="GrabHUD/GrabHint" unique_id=1141535929]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.97, 0.88, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 4
 theme_override_fonts/font = ExtResource("3_lilita")
-theme_override_font_sizes/font_size = 15
 text = "[E] Grab"
 horizontal_alignment = 1
 vertical_alignment = 1

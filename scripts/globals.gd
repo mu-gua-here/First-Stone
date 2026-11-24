@@ -32,6 +32,19 @@ func register_builder(b: Node) -> void:
 func register_day_night(d: Node) -> void:
 	day_night = d
 
+func is_gameplay_input_blocked() -> bool:
+	for blocker in get_tree().get_nodes_in_group("gameplay_input_blocker"):
+		if blocker.has_method("is_open") and bool(blocker.call("is_open")):
+			return true
+	return false
+
+func cancel_gameplay_input() -> void:
+	if player != null and player.has_method("cancel_gameplay_input"):
+		player.call("cancel_gameplay_input")
+	var view_node := get_tree().get_first_node_in_group("view")
+	if view_node != null and view_node.has_method("cancel_gameplay_input"):
+		view_node.call("cancel_gameplay_input")
+
 ## In-game days elapsed since the game started (a fraction while a day is in progress; 0.0 without a day/night cycle).
 ## Regrowth and births count time in these, so they follow the day length and stand still while the clock is stopped.
 func game_days() -> float:

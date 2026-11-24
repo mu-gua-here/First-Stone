@@ -1,6 +1,7 @@
 extends Node3D
 
 # Object to track for camera
+@export_category("Camera")
 @export var target: Node3D
 @export var follow_speed: float = 10.0
 
@@ -9,6 +10,7 @@ extends Node3D
 @onready var camera := $Camera as Camera3D
 
 # Zoom settings
+@export_category("Zoom")
 @export var max_zoom := 20.0
 @export var min_zoom := 0.0 # low enough to reach first person by zooming in (see first_person_distance)
 @export var scroll_zoom_speed := 5.0
@@ -25,6 +27,7 @@ var _clear_time := 0.0
 var _last_zoom := 6.0
 
 # Viewing settings
+@export_category("Viewing")
 @export var springarm_enabled := true
 @export var view_angle_restricted := true
 
@@ -49,6 +52,7 @@ const CAMERA_FOLLOW := 10.0
 @export var lag_compensation := 1.0 # 0 = off, 1 = cancel the follow lag exactly
 # The lead only matters when the camera is close (tight spaces). Full strength at/below lead_full_distance,
 # fading to nothing at lead_off_distance, so a far-out camera isn't jerked around by velocity changes.
+@export_category("First person")
 @export var lead_full_distance := 3.0
 @export var lead_off_distance := 6.0
 @export var min_camera_distance := 1.5
@@ -67,9 +71,7 @@ const CAMERA_FOLLOW := 10.0
 @export var eye_forward := 0.6
 ## Hide the player's body in first person (off: the body stays visible, the camera just sits in front of it)
 @export var hide_body_in_first_person := false
-## While the player's eyes are inside a tree's canopy (its "Springarm" collider), that tree no longer pushes the camera in
-## (which used to cut to first person inside the leaves), and if the camera was in first person it backs out to this zoom.
-@export var canopy_exit_zoom := 3.5
+## While the player's eyes are inside a tree's canopy (its "Springarm" collider), that tree no longer pushes the camera in.
 @export_flags_3d_physics var canopy_collision_mask := 8
 var _canopy_excluded: Array[RID] = []
 ## The player's visual (path relative to the target). Hidden in first person.
@@ -92,16 +94,39 @@ var _tp_pos_valid := false
 @export var pinch_zoom_speed := 0.5
 ## Web, mouse/trackpad: the first click locks the pointer so moving the mouse alone turns the camera (like most web games)
 @export var web_auto_pointer_lock := true
+const POINTER_LOCK_PENDING_MSEC := 1000
+var _pointer_lock_pending_until_msec := 0
 
-# Shift lock (toggle with the shift_lock action, L by default): the mouse is captured and simply turns the camera,
+# Shift lock (toggle with the shift_lock action, Ctrl by default): the mouse is captured and simply turns the camera,
 # and the camera sits slightly over the player's shoulder. Clicks then act at the screen centre (crosshair),
-# see Globals.aim_position(). Press the key again (or Esc in a browser) to get the cursor back.
+# see Globals.aim_position(). Press Ctrl again to get the cursor back.
 @export_group("Shift lock")
 @export var shift_lock_sensitivity := 0.15 # degrees per pixel of mouse movement
 @export var shift_lock_shoulder := 0.7 # metres the camera slides to the right while locked
 @export var crosshair: Control
 var shift_locked := false
 @export_group("")
+
+# Intro fly-in, played once the player confirms their name (Network calls play_intro()). IntroStart is a Marker3D in
+# main.tscn: the camera opens there (above and behind the spawn, looking over the starting huts) and the
+# IntroCamTransition AnimationPlayer animates intro_blend 0 -> 1, which glides the camera from that pose into the
+# normal follow camera. Move/rotate IntroStart, or edit the animation's length/easing, to retune the shot.
+@export_group("Intro")
+@export var intro_enabled := true
+@export var intro_start: Node3D
+@export var intro_player: AnimationPlayer
+@export var intro_animation := &"intro"
+## 0 = camera sits on intro_start, 1 = normal gameplay camera. Driven by the intro animation, don't set it by hand.
+@export_range(0.0, 1.0) var intro_blend := 1.0
+## Seconds into the intro before a key press / click skips it (so the Enter that confirmed the name doesn't)
+@export var intro_skip_delay := 0.75
+## Seconds the quick zoom into the player takes when the intro is skipped
+@export var intro_skip_duration := 0.6
+@export_group("")
+var intro_playing := false
+var _intro_time := 0.0
+var _intro_skipping := false
+var _intro_tween: Tween
 
 # Prevent hitting exact 0.0° and -90.0° singularities
 @export_range(-89.9, 89.9) var max_tilt_limit := 44.9
@@ -121,7 +146,14 @@ func _ready():
 	camera_rotation = rotation_degrees
 	current_rotation = rotation_degrees
 	add_to_group("view")
+	add_to_group("gameplay_input_blocker") # see is_open(): no orbit / zoom / clicks while the intro plays
 	camera.make_current()
+	if intro_player != null:
+		intro_player.animation_finished.connect(_on_intro_finished)
+	if intro_enabled and intro_start != null and intro_player != null and intro_player.has_animation(intro_animation):
+		# Hold the opening shot behind the name dialog until play_intro() starts the fly-in
+		intro_blend = 0.0
+		camera.global_transform = intro_start.global_transform
 
 func _physics_process(delta: float) -> void:
 	if not target:
@@ -171,13 +203,12 @@ func _update_canopy() -> void:
 	if entered:
 		_held_length = INF # forget the short length the canopy had forced on the arm
 		_clear_time = 0.0
-	if not inside.is_empty() and zoom < canopy_exit_zoom and (_first_person or zoom < first_person_distance + first_person_hysteresis):
-		zoom = canopy_exit_zoom # snap out of first person; zoom back in yourself once you are clear of the tree
 
 func _process(delta: float) -> void:
+	if intro_playing:
+		_intro_time += delta
 	# A browser gives the mouse back on Esc without telling us: follow it
-	if shift_locked and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-		set_shift_lock(false)
+	_sync_shift_lock_state()
 	camera.h_offset = lerpf(camera.h_offset, shift_lock_shoulder * (1.0 - smoothstep(0.0, 1.0, _fp_blend)) if shift_locked else 0.0, minf(delta * 10.0, 1.0)) # no over-the-shoulder slide in first person: it pushed the view off the body
 	# Lerp pure script variables using lerp_angle (NEVER read rotation_degrees!)
 	var lerp_weight = delta * 12.0
@@ -196,7 +227,8 @@ func _process(delta: float) -> void:
 	_fp_blend = move_toward(_fp_blend, 1.0 if _first_person else 0.0, delta / maxf(first_person_transition, 0.01))
 	camera.global_rotation = copy_target.global_rotation
 	if not _tp_pos_valid:
-		_tp_pos = camera.global_position
+		# During the intro the camera is sitting on the opening shot, so start the follow camera at its gameplay spot instead
+		_tp_pos = copy_target.global_position if intro_playing else camera.global_position
 		_tp_pos_valid = true
 	_tp_pos = _tp_pos.lerp(copy_target.global_position, delta * CAMERA_FOLLOW)
 	_tp_pos = _clear_of_player(_tp_pos)
@@ -209,6 +241,7 @@ func _process(delta: float) -> void:
 		var eyes := target.global_position + Vector3.UP * eye_height + look * eye_forward
 		cam_pos = _tp_pos.lerp(eyes, smoothstep(0.0, 1.0, _fp_blend))
 	camera.global_position = cam_pos
+	_apply_intro_blend()
 	_set_player_visual_hidden(hide_body_in_first_person and _fp_blend > 0.85)
 	
 	handle_input(delta)
@@ -275,7 +308,64 @@ func _clear_of_player(pos: Vector3) -> Vector3:
 		dir = global_basis.z
 	return head + dir * min_camera_distance
 
+# --- Intro fly-in ---
+
+# Member of the "gameplay_input_blocker" group (see Globals.is_gameplay_input_blocked)
+func is_open() -> bool:
+	return intro_playing
+
+func play_intro() -> void:
+	if not intro_enabled or intro_start == null or intro_player == null or not intro_player.has_animation(intro_animation):
+		intro_blend = 1.0
+		return
+	intro_playing = true
+	_intro_time = 0.0
+	_intro_skipping = false
+	_tp_pos_valid = false # restart the smoothed camera at its gameplay spot; the blend hides it
+	intro_blend = 0.0
+	cancel_gameplay_input()
+	intro_player.play(intro_animation)
+
+func skip_intro() -> void:
+	if not intro_playing or _intro_skipping:
+		return
+	# Don't cut to the end: freeze the animation where it is and swoop the rest of the way to the player, fast
+	_intro_skipping = true
+	intro_player.pause()
+	_intro_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	_intro_tween.tween_property(self, "intro_blend", 1.0, intro_skip_duration)
+	_intro_tween.finished.connect(_end_intro)
+
+func _on_intro_finished(anim_name: StringName) -> void:
+	if anim_name == intro_animation:
+		_end_intro()
+
+func _end_intro() -> void:
+	if not intro_playing:
+		return
+	if _intro_tween != null and _intro_tween.is_valid():
+		_intro_tween.kill()
+	_intro_tween = null
+	_intro_skipping = false
+	intro_playing = false
+	intro_blend = 1.0
+	cancel_gameplay_input()
+
+# Slide the already-computed gameplay camera back towards the opening shot: position lerp + rotation slerp
+func _apply_intro_blend() -> void:
+	if intro_blend >= 1.0 or intro_start == null:
+		return
+	var from := intro_start.global_transform
+	var to := camera.global_transform
+	camera.global_position = from.origin.lerp(to.origin, intro_blend)
+	camera.global_basis = Basis(from.basis.get_rotation_quaternion().slerp(to.basis.get_rotation_quaternion(), intro_blend))
+
 func handle_input(_delta: float):
+	if Globals.is_gameplay_input_blocked():
+		zoom_speed = 0.0
+		_drag_state = DragState.NONE
+		return
+
 	# CAMERA ZOOMING (Mouse Wheel)
 	if not _web_wheel():
 		if Input.is_action_just_pressed("zoom_in"):
@@ -314,23 +404,38 @@ func _clamp_pitch() -> void:
 func set_shift_lock(on: bool) -> void:
 	shift_locked = on
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if on else Input.MOUSE_MODE_VISIBLE
+	_pointer_lock_pending_until_msec = 0
+	if on and OS.has_feature("web"):
+		_pointer_lock_pending_until_msec = Time.get_ticks_msec() + POINTER_LOCK_PENDING_MSEC
 	if crosshair != null:
 		crosshair.visible = on
 	_drag_state = DragState.NONE
 
-func _unhandled_input(event: InputEvent) -> void:
-	# L locks the pointer; it is only ever given back with Esc (a browser does that itself, see _process)
-	if event.is_action_pressed("shift_lock") and not event.is_echo():
-		if not shift_locked:
-			set_shift_lock(true)
+func _sync_shift_lock_state() -> void:
+	if not shift_locked:
 		return
-	if shift_locked and event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_pointer_lock_pending_until_msec = 0
+		return
+	if Time.get_ticks_msec() >= _pointer_lock_pending_until_msec:
 		set_shift_lock(false)
+
+func cancel_gameplay_input() -> void:
+	zoom_speed = 0.0
+	_drag_state = DragState.NONE
+
+func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
+	_sync_shift_lock_state()
+	# Ctrl toggles the pointer lock
+	if event.is_action_pressed("shift_lock") and not event.is_echo():
+		set_shift_lock(not shift_locked)
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventMouseButton and event.pressed:
-		# Web with a mouse/trackpad: the first click on the game locks the pointer, so just moving the mouse looks around
-		# (Esc gives it back). A finger on a touchscreen arrives as an emulated mouse and keeps plain one-finger drag-to-orbit.
+		# Web with a mouse/trackpad: the first click on the game locks the pointer, so just moving the mouse looks around.
+		# A finger on a touchscreen arrives as an emulated mouse and keeps plain one-finger drag-to-orbit.
 		if web_auto_pointer_lock and OS.has_feature("web") and not shift_locked \
 				and event.button_index == MOUSE_BUTTON_LEFT and event.device != InputEvent.DEVICE_ID_EMULATION:
 			set_shift_lock(true)
@@ -352,7 +457,7 @@ func _left_drag_allowed() -> bool:
 	if player != null and player.has_method("is_working") and player.is_working():
 		return false # holding on a tree / construction site
 	var builder = Globals.builder
-	if builder != null and builder.interact_mode:
+	if builder != null and builder.build_mode:
 		return false # build mode: left click places things
 	var selector = get_tree().get_first_node_in_group("citizen_selector")
 	if selector != null and selector.selected_citizen != null:
@@ -360,6 +465,16 @@ func _left_drag_allowed() -> bool:
 	return true
 
 func _input(event):
+	if intro_playing:
+		# Any key / click speeds the fly-in up into the player (Esc is left alone for the pause menu)
+		if _intro_time > intro_skip_delay \
+				and ((event is InputEventKey and event.pressed and not event.echo and event.keycode != KEY_ESCAPE) \
+				or (event is InputEventMouseButton and event.pressed)):
+			skip_intro()
+			get_viewport().set_input_as_handled()
+		return
+	if Globals.is_gameplay_input_blocked():
+		return
 	# Shift lock: moving the mouse turns the camera (the cursor is captured)
 	if shift_locked and event is InputEventMouseMotion:
 		camera_rotation.y -= event.relative.x * shift_lock_sensitivity

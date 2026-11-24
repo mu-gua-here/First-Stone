@@ -1,10 +1,9 @@
 extends Node
 
-## Pause menu (` or P): resume, save / load, quit, plus settings for audio, graphics and the interface.
+## Pause menu (Esc or P): resume, save / load, quit, plus settings for audio, graphics and the interface.
 ## The UI itself is the PauseMenu node in main.tscn (edit it in the editor); this script only wires it up and applies the
 ## settings. Settings are saved to user://settings.cfg and re-applied every time the scene starts.
 ##
-## Not Esc: in a browser / fullscreen Esc leaves fullscreen and releases the pointer lock, so it can't also be a menu key.
 ## Clicking the dimmed area outside the panel goes back one page (settings -> main page -> resume).
 ## Online the world keeps running on the server, so the menu doesn't pause the tree there.
 
@@ -19,6 +18,9 @@ const DEFAULT_FPS := 60
 const FAR_MARGIN := 1.15 # the low preset puts the camera far plane this much past the end of the fog
 const PREVIEW_SOUND := "sounds/toggle.ogg" # played when you let go of a volume slider
 const PREVIEW_VOLUME_DB := -20.0
+## The UI is always drawn at this fraction of the window's base size; the UI scale setting multiplies on top of it, so the
+## slider reads 1.00x at the default look (applied content_scale_factor = slider * UI_BASE_SCALE)
+const UI_BASE_SCALE := 1.0
 
 # Auto quality: after every change it waits AUTO_SETTLE (shaders / buffers hitch), then averages the frame rate over
 # AUTO_WINDOW seconds; below AUTO_LOW_RATIO of the FPS cap it drops one preset. It never goes back up on its own (that would
@@ -31,25 +33,25 @@ const AUTO_LOW_RATIO := 0.85
 ## lod: Viewport.mesh_lod_threshold (higher = simpler meshes sooner). fog_scale: < 1 pulls the fog in and the camera far plane
 ## with it, so the shorter view distance is hidden by fog. fog_density: minimum fog opacity (1 = fully opaque at the fog's far
 ## end). msaa: anti-aliasing of 3D geometry. atlas: directional shadow atlas size (0 = the project setting). soft: shadow filter
-## quality (-1 = the project setting). fancy: SSR + SSAO + volumetric fog instead of depth fog, reflective ocean (Forward+ only).
-## clouds: the cloud layer in the sky and mirrored in the ocean (cheap, so High has them too).
+## quality (-1 = the project setting). fancy: SSAO + volumetric fog instead of depth fog, reflective ocean (Forward+ only).
+## glow: bloom/glow in the Environment. clouds: the cloud layer in the sky and mirrored in the ocean (cheap, so High has them too).
 const PRESETS := {
 	Quality.LOW: {
 		"shadows": false, "scale": 0.5, "lod": 4.0, "fog_scale": 0.5, "fog_density": 1.0,
-		"msaa": Viewport.MSAA_DISABLED, "atlas": 0, "soft": -1, "fancy": false, "clouds": false,
+		"msaa": Viewport.MSAA_DISABLED, "atlas": 0, "soft": -1, "fancy": false, "glow": false, "clouds": false,
 	},
 	Quality.MEDIUM: {
 		"shadows": true, "scale": 0.75, "shadow_mode": DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS, "lod": 1.0,
-		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_DISABLED, "atlas": 0, "soft": -1, "fancy": false, "clouds": false,
+		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_DISABLED, "atlas": 0, "soft": -1, "fancy": false, "glow": false, "clouds": false,
 	},
 	Quality.HIGH: {
 		"shadows": true, "scale": 1.0, "shadow_mode": DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS, "lod": 1.0,
-		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_2X, "atlas": 0, "soft": -1, "fancy": false, "clouds": true,
+		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_2X, "atlas": 0, "soft": RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM, "fancy": false, "glow": true, "clouds": true,
 	},
 	Quality.ULTRA: {
 		"shadows": true, "scale": 1.0, "shadow_mode": DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS, "lod": 1.0,
-		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_4X, "atlas": 8192,
-		"soft": RenderingServer.SHADOW_QUALITY_SOFT_ULTRA, "fancy": true, "clouds": true,
+		"fog_scale": 1.0, "fog_density": 0.0, "msaa": Viewport.MSAA_2X, "atlas": 4096,
+		"soft": RenderingServer.SHADOW_QUALITY_SOFT_HIGH, "fancy": true, "glow": true, "clouds": true,
 	},
 }
 
@@ -57,25 +59,40 @@ const QUALITY_INFO := {
 	Quality.LOW: "No shadows, 0.5x resolution, low model detail and a short view distance hidden by fog.",
 	Quality.MEDIUM: "Shadows with 2 splits, 0.75x resolution, default model detail and view distance.",
 	Quality.HIGH: "Shadows with 4 splits, full resolution, anti-aliasing on scene geometry, and clouds in the sky and on the water.",
-	Quality.ULTRA: "Everything in High, plus sharper high-resolution shadows, reflections (SSR, and sky reflections on the water), ambient occlusion and volumetric fog with light shafts instead of depth fog. Native builds only.",
+	Quality.ULTRA: "Everything in High, plus sharper high-resolution shadows, water reflections, ambient occlusion and volumetric fog with light shafts instead of depth fog. Native builds only.",
 }
 const AUTO_INFO := "Starts at the best preset this device supports and steps down whenever the frame rate stays below %d%% of the FPS cap. Right now: %s."
 
 ## Controls tab: label -> input actions (the key names are read from the InputMap, so rebinding in the project keeps this right)
 const CONTROL_ROWS := [
 	["Move", ["ui_up", "ui_left", "ui_down", "ui_right"]],
-	["Jump", ["player_jump"]],
+	["Jump / swim up", ["player_jump"]],
+	["Swim down", ["descend"]],
 	["Run", ["run"]],
 	["Lock / free the pointer", ["shift_lock"]],
-	["Rotate camera (keys)", ["camera_left", "camera_right", "camera_forward", "camera_back"]],
-	["Zoom (keys)", ["zoom_in_hold", "zoom_out_hold"]],
-	["Grab / collect", ["grab"]],
-	["Drop", ["drop"]],
-	["Interact mode", ["interact_mode"]],
+	["Orbit camera (keys)", ["camera_left", "camera_right", "camera_forward", "camera_back"]],
+	["Zoom camera", ["zoom_in", "zoom_out", "zoom_in_hold", "zoom_out_hold"]],
+	["Drop carried item", ["drop"]],
+	["Build mode", ["build_mode"]],
 	["Demolish mode", ["demolish"]],
+	["Rotate building", ["rotate"]],
+	["Select hotbar slot", [
+		"selection_0", "selection_1", "selection_2", "selection_3", "selection_4",
+		"selection_5", "selection_6", "selection_7", "selection_8", "selection_9",
+	]],
+	["Change hotbar page", ["hotbar_page_prev", "hotbar_page_next"]],
+	["Open policy editor", ["open_policy_editor"]],
 	["Show / hide clock", ["toggle_clock"]],
+	["Game speed (slower / normal / faster)", ["time_slower", "time_normal", "time_faster"]],
 	["Quick save", ["save"]],
 	["Quick load", ["load"]],
+]
+
+const CONTROL_NOTES := [
+	"Left-click selects citizens and picks up loose items or fruit. Hold left-click to chop trees or help build. Select a citizen, then click a tree, fruit bush or construction site to assign them.",
+	"Build mode: click to place. Press Z to enter / leave zone painting; use 1-5 to choose a brush and click-drag to paint.",
+	"Drag with the right or middle mouse button to orbit the camera; left-drag empty ground also orbits. Scroll to zoom. Right-click rotates the selected building.",
+	"Offline / host: hold F to eat carried fruit. Press X to sleep or wake.",
 ]
 
 @export var sun: DirectionalLight3D
@@ -87,6 +104,7 @@ const CONTROL_ROWS := [
 @export var save_dialog: CanvasLayer
 
 @onready var _menu := %MenuLayer as CanvasLayer
+@onready var _center := %Center as Control
 @onready var _main_page := %MainPage as Control
 @onready var _settings_page := %SettingsPage as Control
 @onready var _fps_label := %FpsLabel as Label
@@ -103,7 +121,7 @@ var _fps: int = DEFAULT_FPS
 var _vsync := true
 var _fullscreen := false
 var _fov := 75.0
-var _ui_scale := 1.0
+var _ui_scale := 1.0 # relative to UI_BASE_SCALE (what the slider shows)
 var _sensitivity := 1.0
 var _show_fps := false
 var _volume := {&"Master": 1.0, &"Effects": 1.0, &"Music": 1.0} # bus name -> 0..1
@@ -125,6 +143,9 @@ var _auto_frames := 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	add_to_group("gameplay_input_blocker")
+	_center.resized.connect(_update_pause_menu_scale_pivot)
+	call_deferred("_update_pause_menu_scale_pivot")
 	_menu.visible = false
 	if camera != null:
 		_default_far = camera.far
@@ -146,6 +167,10 @@ func _ready() -> void:
 	if _fullscreen and not web: # a browser only allows fullscreen from a click, so there it starts windowed
 		_apply_fullscreen()
 	_auto_reset()
+
+func _notification(what: int) -> void:
+	if OS.has_feature("web") and what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT]:
+		open()
 
 func _process(_delta: float) -> void:
 	if _show_fps:
@@ -195,6 +220,8 @@ func _input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if event.is_action_pressed(PAUSE_ACTION) and not _menu.visible and not _dialog_showing():
 		open()
 		get_viewport().set_input_as_handled()
@@ -203,8 +230,12 @@ func _dialog_showing() -> bool:
 	return (name_dialog != null and name_dialog.visible) or (save_dialog != null and save_dialog.visible)
 
 func open() -> void:
-	if _menu.visible:
+	if _menu.visible or _dialog_showing():
 		return
+	for blocker in get_tree().get_nodes_in_group("gameplay_input_blocker"):
+		if blocker != self and blocker.has_method("is_open") and bool(blocker.call("is_open")):
+			return
+	Globals.cancel_gameplay_input()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	var offline := not Globals.online_client
 	_save_button.visible = offline
@@ -213,6 +244,9 @@ func open() -> void:
 	_show_page(_main_page)
 	_menu.visible = true
 	_set_paused(true)
+
+func is_open() -> bool:
+	return _menu.visible
 
 func close() -> void:
 	_save_settings()
@@ -269,27 +303,27 @@ func _connect_widgets() -> void:
 	%QualityUltra.pressed.connect(_set_quality.bind(Quality.ULTRA))
 	%Fps30.pressed.connect(_set_fps.bind(30))
 	%Fps60.pressed.connect(_set_fps.bind(60))
-	%VsyncCheck.toggled.connect(func(on: bool): _change(func(): _vsync = on))
-	%FovSlider.value_changed.connect(func(v: float): _change(func(): _fov = v))
-	%UiScaleSlider.value_changed.connect(func(v: float): _change(func(): _ui_scale = v))
-	%SensitivitySlider.value_changed.connect(func(v: float): _change(func(): _sensitivity = v))
-	%FpsCheck.toggled.connect(func(on: bool): _change(func(): _show_fps = on))
+	%VsyncCheck.toggled.connect(func(on: bool): _change(func(): _vsync = on, _apply_display))
+	%FovSlider.value_changed.connect(func(v: float): _change(func(): _fov = v, _apply_interface))
+	%UiScaleSlider.value_changed.connect(func(v: float): _change(func(): _ui_scale = v, _apply_interface))
+	%SensitivitySlider.value_changed.connect(func(v: float): _change(func(): _sensitivity = v, _apply_interface))
+	%FpsCheck.toggled.connect(func(on: bool): _change(func(): _show_fps = on, _apply_interface))
 	%FullscreenCheck.toggled.connect(_on_fullscreen_toggled)
 
 ## Runs a settings change (a lambda that sets the variable), then applies everything and refreshes the labels
-func _change(setter: Callable) -> void:
+func _change(setter: Callable, apply: Callable) -> void:
 	if _syncing:
 		return
 	setter.call()
 	_dirty = true
-	_apply_all()
+	apply.call()
 	_update_value_labels()
 
 func _set_quality(quality: int) -> void:
 	if _syncing:
 		return
 	_auto = false
-	_change(func(): _quality = quality)
+	_change(func(): _quality = quality, _apply_graphics)
 	_refresh_quality_ui()
 
 func _set_auto() -> void:
@@ -297,11 +331,11 @@ func _set_auto() -> void:
 		return
 	_auto = true
 	_auto_reset()
-	_change(func(): _quality = _max_quality())
+	_change(func(): _quality = _max_quality(), _apply_graphics)
 	_refresh_quality_ui()
 
 func _set_fps(fps: int) -> void:
-	_change(func(): _fps = fps)
+	_change(func(): _fps = fps, _apply_display)
 	_auto_reset()
 
 func _refresh_quality_ui() -> void:
@@ -309,7 +343,7 @@ func _refresh_quality_ui() -> void:
 	_quality_info.text = (AUTO_INFO % [roundi(AUTO_LOW_RATIO * 100.0), QUALITY_NAMES[_quality]]) if _auto else QUALITY_INFO[_quality]
 
 func _on_volume_changed(value: float, bus: StringName) -> void:
-	_change(func(): _volume[bus] = value)
+	_change(func(): _volume[bus] = value, _apply_audio)
 
 func _on_volume_released(_value_changed: bool) -> void:
 	Audio.play(PREVIEW_SOUND, PREVIEW_VOLUME_DB)
@@ -317,8 +351,7 @@ func _on_volume_released(_value_changed: bool) -> void:
 func _on_fullscreen_toggled(on: bool) -> void:
 	if _syncing:
 		return
-	_change(func(): _fullscreen = on)
-	_apply_fullscreen()
+	_change(func(): _fullscreen = on, _apply_fullscreen)
 
 # --- Buttons -------------------------------------------------------------------
 
@@ -381,6 +414,7 @@ func _apply_graphics() -> void:
 		day_night.fog_distance_scale = preset["fog_scale"]
 		day_night.fog_min_density = preset["fog_density"]
 		day_night.fancy_lighting = preset["fancy"] and _ultra_supported()
+		day_night.glow_enabled = preset["glow"]
 		day_night.clouds_enabled = preset["clouds"]
 	elif sun != null:
 		sun.shadow_enabled = preset["shadows"]
@@ -403,8 +437,11 @@ func _apply_interface() -> void:
 	if view != null:
 		view.set("shift_lock_sensitivity", _base_look_sens * _sensitivity)
 		view.set("drag_sensitivity", _base_drag_sens * _sensitivity)
-	get_window().content_scale_factor = _ui_scale
+	get_window().content_scale_factor = _ui_scale * UI_BASE_SCALE
 	_fps_label.visible = _show_fps
+
+func _update_pause_menu_scale_pivot() -> void:
+	_center.pivot_offset = _center.size * 0.5
 
 # --- Widgets <-> settings ------------------------------------------------------
 
@@ -449,6 +486,8 @@ func _build_controls_text() -> void:
 				keys.append(key)
 		if not keys.is_empty():
 			text += "%s: [b]%s[/b]\n" % [row[0], " / ".join(keys)]
+	for note in CONTROL_NOTES:
+		text += "%s\n" % note
 	text += "Pause menu: [b]%s[/b]" % _key_texts(PAUSE_ACTION, false)
 	(%ControlsText as RichTextLabel).text = text
 
@@ -486,7 +525,7 @@ func _load_settings() -> void:
 	_vsync = config.get_value("graphics", "vsync", _vsync)
 	_fov = clampf(config.get_value("graphics", "fov", _fov), 50.0, 110.0)
 	_fullscreen = config.get_value("interface", "fullscreen", _fullscreen)
-	_ui_scale = clampf(config.get_value("interface", "ui_scale", _ui_scale), 0.5, 2.0)
+	_ui_scale = clampf(config.get_value("interface", "ui_scale_rel", _ui_scale), 0.5, 2.0)
 	_sensitivity = clampf(config.get_value("interface", "sensitivity", _sensitivity), 0.1, 3.0)
 	_show_fps = config.get_value("interface", "show_fps", _show_fps)
 
@@ -503,7 +542,11 @@ func _save_settings() -> void:
 	config.set_value("graphics", "vsync", _vsync)
 	config.set_value("graphics", "fov", _fov)
 	config.set_value("interface", "fullscreen", _fullscreen)
-	config.set_value("interface", "ui_scale", _ui_scale)
+	config.set_value("interface", "ui_scale_rel", _ui_scale)
 	config.set_value("interface", "sensitivity", _sensitivity)
 	config.set_value("interface", "show_fps", _show_fps)
-	config.save(SETTINGS_PATH)
+	var err := config.save(SETTINGS_PATH)
+	if err != OK:
+		push_error("PauseMenu: failed to save settings (error %d)." % err)
+		return
+	_dirty = false

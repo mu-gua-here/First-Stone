@@ -68,13 +68,10 @@ var _prop_visuals := {} # resource_type -> {"mesh": Mesh, "xform": Transform3D},
 
 @export_group("Zones")
 ## What the tiles are designated as (stockpiles, gathering areas...) is data on the tiles (ZoneMap), painted in zone mode
-## (Tab, then Z). This GridMap ("Zones" in main.tscn) only DRAWS it: its MeshLibrary has one flat item per zone
+## (B, then Z). This GridMap ("Zones" in main.tscn) only DRAWS it: its MeshLibrary has one flat item per zone
 ## (structures/zone-tiles.tres). Line it up with the Structures GridMap by hand in the editor (position, cell size,
-## cell scale): the game uses its transform as it is. Tiles painted on it in the editor are cleared at start.
+## cell scale): the game uses its transform as it is. Tiles painted on it in the editor are the starting zones.
 @export var zone_overlay: GridMap
-## Tiles the world starts with, as cell rectangles (x, z, width, height). A loaded save replaces them.
-@export var starting_log_zone := Rect2i(-1, -1, 2, 2)
-@export var starting_food_zone := Rect2i(3, -1, 2, 2)
 
 @export_group("HUD nodes")
 @export var build_info_label: Label # what's selected while in build mode
@@ -184,16 +181,15 @@ var _stump_nodes: Dictionary = {} # tree node name -> its stump, on every peer (
 
 var plane: Plane # Used for raycasting mouse
 
-# Modes: normal movement mode <-> INTERACT mode (Tab: the cursor is out). Inside interact mode you are BUILDING by default;
-# Backspace switches to DELETE mode (click-and-hold a building to take it apart, nothing is placed) and B goes back to
-# building. Tab leaves interact mode from either.
-var interact_mode: bool = false  # true = interact mode (cursor out: building, or deleting when delete_mode is on)
-var delete_mode: bool = false # only while interact_mode: clicking a building takes it apart (see Player._try_start_work)
-var zone_mode: bool = false # only while interact_mode: click/drag paints tiles with zone_brush (Z in interact mode; B or Z leaves)
+# Modes: normal movement mode <-> BUILD mode (B: the cursor is out). Command+B switches to DELETE mode (click-and-hold a
+# building to take it apart, nothing is placed). B returns from delete/zone mode to building, then leaves build mode.
+var build_mode: bool = false  # true = interact mode (cursor out: building, or deleting when delete_mode is on)
+var delete_mode: bool = false # only while build_mode: clicking a building takes it apart (see Player._try_start_work)
+var zone_mode: bool = false # only while build_mode: click/drag paints tiles with zone_brush (Z in interact mode; B or Z leaves)
 var zone_brush: int = ZoneMap.Type.LOG_STOCKPILE # the zone the paint brush lays down (ZoneMap.Type.NONE rubs zones out)
 var _zone_last_cell: Variant = null # the tile the brush last painted this stroke (null = no stroke going)
 
-const DELETE_MODE_HINT := "DELETE MODE - click and hold a building to take it apart\n[B] back to building    [Tab] leave interact mode"
+const DELETE_MODE_HINT := "DEMOLISH MODE - click and hold a building to take it apart\n[B] back to building"
 const NO_ID := ""
 const DEMOLISH_REACH := 2.0 # fallback: how far (flat) from a click a structure/site may be and still be found
 const BUILD_RANGE_CELLS := 5 # how many grid cells from the player a structure may be placed
@@ -341,7 +337,8 @@ func pick_world_position(screen_pos: Vector2) -> Variant:
 		return null
 	var from := view_camera.project_ray_origin(screen_pos)
 	var dir := view_camera.project_ray_normal(screen_pos)
-	var query := PhysicsRayQueryParameters3D.create(from, from + dir * PICK_RAY_LENGTH, pick_collision_mask)
+	var query := PhysicsRayQueryParameters3D.create(
+		from, from + dir * PICK_RAY_LENGTH, pick_collision_mask | ground_collision_mask)
 	query.exclude = _pick_excludes()
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if debug_picking and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -399,25 +396,24 @@ func _ground_height_or_nan(pos: Vector3) -> float:
 	return hit.position.y if not hit.is_empty() else NAN
 
 # --- Zones: what each tile is designated as ---------------------------------------------------------------------
-# Stockpiles, gathering areas and so on are DATA on the tiles (ZoneMap), painted in zone mode (Tab, then Z). The Zones
+# Stockpiles, gathering areas and so on are DATA on the tiles (ZoneMap), painted in zone mode (B, then Z). The Zones
 # GridMap in main.tscn only draws it. Nothing is snapped to a block or sized by hand: a zone is the tiles you painted.
 
 func _setup_zones() -> void:
 	# The Zones GridMap's position, cell size and cell scale are set by hand in the editor, so it looks in the game exactly
-	# as it does there. Tiles painted on it in the editor were only for lining it up: from here it shows the zone data.
-	if zone_overlay != null:
-		zone_overlay.clear()
+	# as it does there. Tiles placed on it in the editor are the starting zones: they are read into the zone data as they are.
 	zones.cell_changed.connect(_on_zone_cell_changed)
-	_apply_starting_zones()
-
-func _apply_starting_zones() -> void:
-	for entry in [[starting_log_zone, ZoneMap.Type.LOG_STOCKPILE], [starting_food_zone, ZoneMap.Type.FOOD_STOCKPILE]]:
-		var rect: Rect2i = entry[0]
-		for x in range(rect.position.x, rect.end.x):
-			for z in range(rect.position.y, rect.end.y):
-				var cell := Vector3i(x, build_layer, z)
-				if _is_land_cell(cell):
-					zones.set_type(cell, entry[1])
+	if zone_overlay != null and zone_overlay.mesh_library != null:
+		var lib := zone_overlay.mesh_library
+		for cell in zone_overlay.get_used_cells():
+			var item_id := zone_overlay.get_cell_item(cell)
+			if not lib.get_item_list().has(item_id):
+				push_warning("Zones GridMap cell %s uses MeshLibrary item %d, which no longer exists: clear that cell in the editor" % [cell, item_id])
+				continue
+			var item_name := lib.get_item_name(item_id)
+			var type := ZoneMap.type_from_item(item_name)
+			if type != ZoneMap.Type.NONE:
+				zones.set_type(cell, type)
 
 # Draws a tile's zone on the overlay; a stockpile tile that stops being one lets its pile go (loose physics props again)
 func _on_zone_cell_changed(cell: Vector3i, old_type: int, new_type: int) -> void:
@@ -533,7 +529,7 @@ func restore_zones(cells: PackedVector3Array, names: PackedStringArray) -> void:
 			plain.append_array(zones.cells_of(type))
 			_net("zones", [plain, type]) # tells connected clients what the loaded world looks like
 
-# --- Zone mode (Tab, then Z): paint tiles with a brush ---------------------------------------------------------------
+# --- Zone mode (B, then Z): paint tiles with a brush ---------------------------------------------------------------
 
 func _set_zone_mode(on: bool) -> void:
 	if zone_mode == on:
@@ -544,7 +540,7 @@ func _set_zone_mode(on: bool) -> void:
 	if preview != null:
 		preview.visible = not on # no building ghost while painting
 	if selector != null:
-		selector.visible = interact_mode and not delete_mode
+		selector.visible = build_mode and not delete_mode
 	if not on:
 		build_hint_timer = 0.0
 		if build_hint_label != null:
@@ -615,28 +611,29 @@ func _zone_hud_text() -> String:
 	for i in ZoneMap.BRUSHES.size():
 		var type: int = ZoneMap.BRUSHES[i]
 		parts.append("%s[%d] %s" % [">" if type == zone_brush else "", (i + 1) % 10, ZoneMap.label(type)])
-	return "ZONE MODE - click or drag to paint tiles\n" + "    ".join(parts) + "\n[B] back to building    [Tab] leave interact mode"
+	return "ZONE MODE - click or drag to paint tiles\n" + "    ".join(parts) + "\n[B] back to building / leave build mode"
 
 func _generate_id() -> String:
 	_id_counter += 1
 	return "s_%d_%d" % [Time.get_ticks_usec(), _id_counter]
 
 func _process(delta):
-
-	# Controls
-	action_interact_mode() # Tab: toggle interact mode (the build cursor)
-	action_delete_mode() # Backspace: delete mode (from interact mode)
-	action_rotate() # Rotates selection 90 degrees
-	if zone_mode:
-		_zone_select_brush() # 1-5 pick the zone brush
+	var input_blocked := Globals.is_gameplay_input_blocked()
+	if input_blocked:
+		_zone_last_cell = null
 	else:
-		action_structure_toggle() # Toggles between structures
+		# Controls
+		action_rotate() # Rotates selection 90 degrees
+		if zone_mode:
+			_zone_select_brush() # 1-5 pick the zone brush
+		else:
+			action_structure_toggle() # Toggles between structures
 
 	# Only show selector and process building in building mode (interact mode, not deleting). The cursor snaps to the cell
 	# the mouse is over.
-	if interact_mode and zone_mode and world != null:
+	if not input_blocked and build_mode and zone_mode and world != null:
 		_zone_paint_step(delta)
-	elif interact_mode and not delete_mode and world != null:
+	elif not input_blocked and build_mode and not delete_mode and world != null:
 		var picked = pick_world_position(Globals.aim_position())
 		if picked != null:
 			var world_position: Vector3 = _clamp_to_build_range(picked)
@@ -1004,7 +1001,7 @@ func _warn_if_insufficient_resources(structure: Structure) -> void:
 	if not missing.is_empty():
 		_flash_build_hint("Not enough resources yet -- site will wait for: " + ", ".join(missing))
 
-# --- Demolishing takes labour: hold Del and click-and-hold the structure (see Player._update_demolishing) ---
+# --- Demolishing takes labour: enter with Command+B, then click-and-hold the structure (see Player._update_demolishing) ---
 
 const DEMOLISH_RECOVERY := 0.25 # share of the job a building recovers per second once nobody is working on it
 const DEMOLISH_RING_HEIGHT := 3.5 # metres above the structure's floor
@@ -1476,39 +1473,36 @@ func mark_prop_collected(prop_name: String, feedback: bool = true) -> void:
 		if feedback:
 			on_prop_collected(prop)
 
-# Toggle interact mode (Tab). Leaving it also leaves delete mode.
-
-func action_interact_mode():
-	if InputMap.has_action("interact_mode") and Input.is_action_just_pressed("interact_mode"):
-		interact_mode = !interact_mode
-		_set_delete_mode(false)
-		_set_zone_mode(false)
-		selector.visible = interact_mode
-		if Audio:
-			Audio.play("sounds/toggle.ogg", -30)
-
-# Backspace, while in interact mode, switches from building to delete mode. B (below) switches back.
-
-func action_delete_mode():
-	if interact_mode and not delete_mode and InputMap.has_action("demolish") and Input.is_action_just_pressed("demolish"):
-		_set_delete_mode(true)
-		if Audio:
-			Audio.play("sounds/toggle.ogg", -30)
-
 func _unhandled_key_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	var key: int = event.physical_keycode
-	if key == KEY_B and (delete_mode or zone_mode):
-		_set_delete_mode(false)
-		_set_zone_mode(false)
-	elif key == KEY_Z and interact_mode and not delete_mode:
+	if event.is_action_pressed("demolish", false, true):
+		if build_mode and not delete_mode:
+			_set_delete_mode(true)
+			if Audio:
+				Audio.play("sounds/toggle.ogg", -30)
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("build_toggle", false, true):
+		if delete_mode or zone_mode:
+			_set_delete_mode(false)
+			_set_zone_mode(false)
+		else:
+			build_mode = not build_mode
+			_set_delete_mode(false)
+			_set_zone_mode(false)
+		selector.visible = build_mode
+		if Audio:
+			Audio.play("sounds/toggle.ogg", -30)
+		get_viewport().set_input_as_handled()
+	if event.is_action_pressed("zone_toggle", false, true):
 		_set_zone_mode(not zone_mode)
+		if Audio:
+			Audio.play("sounds/toggle.ogg", -30)
+		get_viewport().set_input_as_handled()
 	else:
 		return
-	if Audio:
-		Audio.play("sounds/toggle.ogg", -30)
-	get_viewport().set_input_as_handled()
 
 func _set_delete_mode(on: bool) -> void:
 	if delete_mode == on:
@@ -1517,7 +1511,7 @@ func _set_delete_mode(on: bool) -> void:
 	if on:
 		_set_zone_mode(false) # deleting and painting zones are different modes
 	if selector != null:
-		selector.visible = interact_mode and not delete_mode # no placement ghost while deleting
+		selector.visible = build_mode and not delete_mode # no placement ghost while deleting
 	if not on:
 		build_hint_timer = 0.0
 		if build_hint_label != null:
@@ -1595,13 +1589,13 @@ func _update_hud() -> void:
 	if build_info_label == null:
 		return
 	if zone_mode:
-		build_info_label.visible = interact_mode
+		build_info_label.visible = build_mode
 		var zone_text := _zone_hud_text()
 		if zone_text != _last_info_text:
 			_last_info_text = zone_text
 			build_info_label.text = zone_text
 		return
-	build_info_label.visible = interact_mode and not structures.is_empty()
+	build_info_label.visible = build_mode and not structures.is_empty()
 	if build_info_label.visible:
 		var structure := structures[index]
 		var info := "Building [%d]: %s" % [(index % 10 + 1) % 10, structure.get_display_name()]
@@ -1852,7 +1846,8 @@ func _citizen_spawn_position() -> Vector3:
 # Finds the nearest gatherable structure (e.g. a tree) to a world position. `resource_type`
 # (e.g. "wood") limits the search to that resource; empty = anything gatherable.
 # `exclude` maps tree id -> time (s, Time.get_ticks_msec()/1000) until which to skip it (trees a citizen couldn't path to)
-func get_nearest_gatherable(pos: Vector3, resource_type: String = "", exclude: Dictionary = {}) -> String:
+# `citizen` (optional): skips whatever the policies forbid that citizen to chop / pick where it stands (zones, see PolicyEngine.is_permitted)
+func get_nearest_gatherable(pos: Vector3, resource_type: String = "", exclude: Dictionary = {}, citizen: Node = null) -> String:
 	var nearest_id := NO_ID
 	var nearest_dist := INF
 	var now := Time.get_ticks_msec() / 1000.0
@@ -1871,6 +1866,10 @@ func get_nearest_gatherable(pos: Vector3, resource_type: String = "", exclude: D
 		var candidate = entry.get("node")
 		if candidate is Gatherable and is_instance_valid(candidate) and candidate.is_depleted():
 			continue # a bare bush has nothing left
+		if citizen != null:
+			var activity := Action.Activity.PICK_FRUIT if structures[structure_index].resource_type == "food" else Action.Activity.CHOP
+			if not PolicyEngine.is_permitted(citizen, activity, entry["position"]):
+				continue
 		var dist = pos.distance_squared_to(entry["position"])
 		if dist < nearest_dist:
 			nearest_dist = dist
@@ -1948,19 +1947,41 @@ func pick_bush_fruit(bush: Gatherable) -> ResourceProp:
 	spawn_resource_prop(spot, bush.structure.secondary_resource_type, 1, true)
 	return get_node_or_null(NodePath("Prop_%d" % _prop_counter)) as ResourceProp
 
-# The nearest bush with fruit on it within `max_dist` (a 3D sphere, height counts) of a position, or null
-func nearest_pickable_bush(pos: Vector3, max_dist: float) -> Gatherable:
+# The nearest bush with fruit on it within `max_dist` (a 3D sphere, height counts) of a position, or null.
+# `citizen` (optional): bushes the policies forbid that citizen to pick from are skipped
+func nearest_pickable_bush(pos: Vector3, max_dist: float, citizen: Node = null) -> Gatherable:
 	var best: Gatherable = null
 	var best_d := max_dist * max_dist
 	for node in get_tree().get_nodes_in_group("gatherable"):
 		var bush := node as Gatherable
 		if bush == null or not bush.pick_fruit_only or bush.is_depleted():
 			continue
+		if citizen != null and not PolicyEngine.is_permitted(citizen, Action.Activity.PICK_FRUIT, bush.global_position):
+			continue
 		var d := pos.distance_squared_to(bush.global_position)
 		if d < best_d:
 			best_d = d
 			best = bush
 	return best
+
+# The bush with fruit under the mouse and within `max_dist` of a position (same 3D reach test as nearest_pickable_bush), or null.
+# Resolved through the same physics pick as trees (pick_object_at), so a nearer object hides a bush behind it.
+func pick_bush_at(screen_pos: Vector2, pos: Vector3, max_dist: float) -> Gatherable:
+	var picked_id := pick_object_at(screen_pos)
+	if picked_id == NO_ID:
+		return null
+	for node in get_tree().get_nodes_in_group("gatherable"):
+		var bush := node as Gatherable
+		if bush == null or not bush.pick_fruit_only or bush.is_depleted():
+			continue
+		if pos.distance_to(bush.global_position) > max_dist:
+			continue
+		var registered: Node = bush
+		while registered != null and not _object_ids.has(registered):
+			registered = registered.get_parent()
+		if registered != null and _object_ids[registered] == picked_id:
+			return bush
+	return null
 
 func spawn_resource_prop(world_pos: Vector3, resource_type: String, amount: int = 1, exact := false) -> void:
 	if resource_type == "" or amount <= 0:
@@ -2210,12 +2231,15 @@ func _restore_ground(visual: Dictionary) -> void:
 		return
 	ground.set_cell_item(visual["ground_cell"], visual["prev_item"], visual["prev_orientation"])
 
-# Finds the nearest active construction site to a world position
-func get_nearest_construction_site(pos: Vector3) -> String:
+# Finds the nearest active construction site to a world position.
+# `citizen` (optional): sites the policies forbid that citizen to build on are skipped
+func get_nearest_construction_site(pos: Vector3, citizen: Node = null) -> String:
 	var nearest_id := NO_ID
 	var nearest_dist := INF
 
 	for id in construction_sites.keys():
+		if citizen != null and not PolicyEngine.is_permitted(citizen, Action.Activity.BUILD, construction_sites[id].position):
+			continue
 		var dist = pos.distance_squared_to(construction_sites[id].position)
 		if dist < nearest_dist:
 			nearest_dist = dist

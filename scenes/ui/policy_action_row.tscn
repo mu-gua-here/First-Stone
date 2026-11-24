@@ -1,0 +1,41 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/policy_action_row.gd" id="1_row"]
+
+[node name="PolicyActionRow" type="HBoxContainer"]
+theme_override_constants/separation = 8
+script = ExtResource("1_row")
+
+[node name="KindOption" type="OptionButton" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(240, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+
+[node name="ActivityOption" type="OptionButton" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(170, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+
+[node name="ZoneOption" type="OptionButton" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(190, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+
+[node name="UpButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Move this action earlier: actions are tried from the top, and the first that applies is run"
+theme_override_font_sizes/font_size = 18
+text = "Up"
+
+[node name="RemoveButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Remove this action"
+theme_override_font_sizes/font_size = 20
+text = "X"

@@ -1,0 +1,285 @@
+[gd_scene format=3 uid="uid://wn1cwojcyr16"]
+
+[ext_resource type="Script" uid="uid://cavh17nw3rlml" path="res://scripts/policy_editor.gd" id="1_editor"]
+[ext_resource type="Theme" uid="uid://bosdj5jpedo6o" path="res://lilita-text.tres" id="2_theme"]
+[ext_resource type="PackedScene" path="res://scenes/ui/policy_clause_row.tscn" id="3_row"]
+[ext_resource type="PackedScene" path="res://scenes/ui/policy_group_row.tscn" id="4_group"]
+[ext_resource type="PackedScene" path="res://scenes/ui/policy_action_row.tscn" id="5_action"]
+
+[node name="PolicyEditor" type="Node" unique_id=2024720668]
+process_mode = 3
+script = ExtResource("1_editor")
+clause_row_scene = ExtResource("3_row")
+group_row_scene = ExtResource("4_group")
+action_row_scene = ExtResource("5_action")
+
+[node name="Layer" type="CanvasLayer" parent="." unique_id=2008093676]
+unique_name_in_owner = true
+process_mode = 3
+layer = 9
+
+[node name="Dim" type="ColorRect" parent="Layer" unique_id=757835063]
+unique_name_in_owner = true
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.55)
+
+[node name="Center" type="CenterContainer" parent="Layer" unique_id=606378388]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="Layer/Center" unique_id=370652813]
+layout_mode = 2
+theme = ExtResource("2_theme")
+
+[node name="Margin" type="MarginContainer" parent="Layer/Center/Panel" unique_id=1707652653]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 18
+
+[node name="Root" type="VBoxContainer" parent="Layer/Center/Panel/Margin" unique_id=1047595909]
+custom_minimum_size = Vector2(1080, 580)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Header" type="HBoxContainer" parent="Layer/Center/Panel/Margin/Root" unique_id=1847152206]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="Layer/Center/Panel/Margin/Root/Header" unique_id=122522923]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 34
+text = "Tribal Notice Board"
+
+[node name="Spacer" type="Control" parent="Layer/Center/Panel/Margin/Root/Header" unique_id=219004606]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="CloseButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Header" unique_id=1216574706]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Close"
+
+[node name="Subtitle" type="Label" parent="Layer/Center/Panel/Margin/Root" unique_id=1350472372]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "The customs of the tribe. A citizen follows the first rule on the list that fits them, so rules near the top win."
+autowrap_mode = 3
+
+[node name="OnlineNote" type="Label" parent="Layer/Center/Panel/Margin/Root" unique_id=11904370]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "The settlement's rules are kept by the host's world. Changing them from here isn't supported online yet."
+autowrap_mode = 3
+
+[node name="Tabs" type="TabContainer" parent="Layer/Center/Panel/Margin/Root" unique_id=1330522880]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+current_tab = 0
+
+[node name="Rules" type="HBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs" unique_id=1264593525]
+layout_mode = 2
+theme_override_constants/separation = 14
+metadata/_tab_index = 0
+
+[node name="Left" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules" unique_id=1039076852]
+custom_minimum_size = Vector2(260, 0)
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="RuleList" type="ItemList" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left" unique_id=143428962]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 20
+
+[node name="ListButtons" type="HBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left" unique_id=395849785]
+layout_mode = 2
+
+[node name="NewButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left/ListButtons" unique_id=1965183326]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "New"
+
+[node name="DeleteButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left/ListButtons" unique_id=941509069]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "Delete"
+
+[node name="UpButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left/ListButtons" unique_id=886177298]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "Up"
+
+[node name="DownButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left/ListButtons" unique_id=610326302]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "Down"
+
+[node name="ResetButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/Left" unique_id=33622788]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Reset to traditions"
+
+[node name="RightScroll" type="ScrollContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules" unique_id=175225369]
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_scroll_mode = 0
+
+[node name="RightBox" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll" unique_id=1122485139]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="EmptyNote" type="Label" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox" unique_id=480117137]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "No rules yet. Press New to write one."
+
+[node name="Form" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox" unique_id=728026099]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="NameEdit" type="LineEdit" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=334133599]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 26
+placeholder_text = "Rule name"
+
+[node name="Flags" type="HBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=2109790852]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="EnabledCheck" type="CheckBox" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form/Flags" unique_id=186762748]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Active"
+
+[node name="IdleCheck" type="CheckBox" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form/Flags" unique_id=250041739]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Skip this rule while the citizen is already busy, so it doesn't keep restarting their task."
+theme_override_font_sizes/font_size = 18
+text = "Only when idle"
+
+[node name="SurvivalCheck" type="CheckBox" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form/Flags" unique_id=1865476781]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Still applies while the citizen is carrying out a task you gave them by hand."
+theme_override_font_sizes/font_size = 18
+text = "Overrides manual orders"
+
+[node name="DefaultNote" type="Label" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1932923943]
+unique_name_in_owner = true
+visible = false
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "A Default Tradition: tweak it or switch it off, but it can't be deleted."
+
+[node name="WhenLabel" type="Label" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1593861297]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "WHEN"
+
+[node name="ConditionHolder" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=2098090116]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ThenLabel" type="Label" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=799351016]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "THEN"
+
+[node name="ActionHolder" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=370976337]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="AddActionButton" type="Button" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1470258811]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_font_sizes/font_size = 20
+text = "+ Add action"
+
+[node name="HSeparator" type="HSeparator" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1426793469]
+layout_mode = 2
+
+[node name="Sentence" type="RichTextLabel" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1637908776]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+theme_override_font_sizes/normal_font_size = 22
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+
+[node name="PreviewLabel" type="RichTextLabel" parent="Layer/Center/Panel/Margin/Root/Tabs/Rules/RightScroll/RightBox/Form" unique_id=1849822215]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+theme_override_font_sizes/normal_font_size = 19
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+
+[node name="Data Hub" type="VBoxContainer" parent="Layer/Center/Panel/Margin/Root/Tabs" unique_id=1038117674]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 8
+metadata/_tab_index = 1
+
+[node name="HubSummary" type="RichTextLabel" parent="Layer/Center/Panel/Margin/Root/Tabs/Data Hub" unique_id=1164679575]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/normal_font_size = 20
+bbcode_enabled = true
+fit_content = true
+scroll_active = false
+
+[node name="HubTree" type="Tree" parent="Layer/Center/Panel/Margin/Root/Tabs/Data Hub" unique_id=1043906295]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 19
+columns = 8
+column_titles_visible = true
+hide_root = true
+
+[node name="ResetDialog" type="ConfirmationDialog" parent="." unique_id=1909609100]
+unique_name_in_owner = true
+title = "Reset to traditions"
+initial_position = 2
+size = Vector2i(460, 120)
+theme = ExtResource("2_theme")
+ok_button_text = "Reset"
+dialog_text = "Remove every rule you wrote and restore the starting traditions?"
+dialog_autowrap = true

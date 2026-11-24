@@ -1,12 +1,13 @@
 extends Node3D
 class_name CitizenSelector
 
-## Click a citizen to see their full stats in a panel and select them for assignment
-## With a citizen selected, click another object to assign them there manually
+## Click a citizen to select them for assignment: a slim card docks bottom-left (it never follows the citizen or covers
+## the view), and the details key (default I) toggles a semi-transparent in-depth panel on the right. Neither pauses the game.
+## With a citizen selected, click the ground to send them to that world position
 
 @export var view_camera: Camera3D
 @export var max_select_distance: float = 100.0
-@export var panel_offset: Vector2 = Vector2(40, -60)  # offset from citizen's screen pos to panel's top-left
+@export var details_key: Key = KEY_I ## toggles the in-depth panel while a citizen is selected
 @export var click_assist_pixels: float = 40.0 # if the raycast misses, select the nearest citizen/player within this many screen pixels of the click instead -- citizens are small, constantly-moving targets
 
 var selected_citizen: Node3D = null
@@ -17,24 +18,28 @@ var builder: Node = null
 @export_group("Nodes")
 @export var panel: PanelContainer
 @export var name_label: Label
-@export var id_label: Label
 @export var stats_label: RichTextLabel
-@export var bars_box: VBoxContainer ## one row per stat, each named after its stat ("Happiness", "Health", "Energy") with children Name / Bar / Value
+@export var bars_box: VBoxContainer ## card bars: one row per stat, each named after its stat ("Happiness") with children Name / Bar / Value
+@export_subgroup("Details")
+@export var details_panel: PanelContainer ## the in-depth panel (right side), toggled with details_key
+@export var details_name_label: Label
+@export var details_stats_label: RichTextLabel
+@export var details_bars: VBoxContainer ## same row layout as bars_box: Health, Hunger, Energy, Happiness, Approval
+@export_subgroup("")
 @export var hostile_label: Label
 @export var assign_hint_label: Label
 @export var ring: MeshInstance3D
-@export var outline_material: Material ## yellow overlay drawn on trees and loose logs while a citizen is selected (assignable targets)
-const OUTLINE_REFRESH_INTERVAL := 0.15 # logs spawn, trees fall and the player walks (what is in reach changes) while a citizen is selected
-var _outlined: Array[MeshInstance3D] = []
-var _outline_timer := 0.0
+@export var outline_material: Material ## yellow overlay drawn on a citizen under the mouse (within the player's reach) as a "you can select me" hint
 var _hovered: Node3D = null # citizen under the mouse and within the player's reach: gets the outline as a "you can select me" hint
 var _hover_meshes: Array[MeshInstance3D] = []
 
 var _plate_hover: Node3D = null # citizen under the mouse at any distance: the only one (besides the selected) with a nameplate
+var _details_open := false # the player's choice; the panel only shows while a citizen is selected, and stays open when selecting someone else
 
 func _ready() -> void:
 	add_to_group("citizen_selector")
 	panel.visible = false
+	details_panel.visible = false
 	ring.visible = false
 	hostile_label.visible = false
 	assign_hint_label.visible = false
@@ -48,11 +53,18 @@ func _ready() -> void:
 	builder = Globals.builder
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == details_key and selected_citizen != null:
+		_details_open = not _details_open
+		details_panel.visible = _details_open
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		# Building mode owns left-click for placement/demolition (the "build"
 		# input action is also bound to it) -- don't also try to select/assign
 		# citizens while placing structures.
-		if builder != null and builder.interact_mode:
+		if builder != null and builder.build_mode:
 			return
 		_try_select_at(Globals.aim_position())
 
@@ -80,20 +92,13 @@ func _try_select_at(screen_pos: Vector2) -> void:
 		return
 	
 	
-	# Not a citizen/player -- if we have a CITIZEN selected (not the player --
-	# the player isn't assignable to anything), see if the click landed on a
-	# building/tree/site cell. This is the manual assignment path (A.3).
+	# Not a citizen -- with a CITIZEN selected (the player isn't commandable), a click on the world sends them to that spot.
 	if selected_citizen and is_instance_valid(selected_citizen) and result and result.has("position"):
-		# A loose log: put the citizen on hauling duty (they push it, and every other loose log, to the stockpile)
-		if result.collider.is_in_group("resource_prop") and not result.collider.collected:
-			var hauling := _execute(Action.new_assign_haul(), String(result.collider.name))
-			_flash_assign_hint(hauling)
-			_after_assign(hauling)
-			get_viewport().set_input_as_handled()
-			return
-		if _try_assign_at_world_position(result.position):
-			get_viewport().set_input_as_handled()
-			return
+		var ok := _execute_go_to(result.position)
+		_flash_assign_hint(ok)
+		_after_assign(ok)
+		get_viewport().set_input_as_handled()
+		return
 	
 	_deselect()
 
@@ -122,16 +127,15 @@ func _find_nearest_on_screen(screen_pos: Vector2) -> Node3D:
 	
 	return best
 
-## Runs an assignment. Online the citizen lives on the server, so ask it to do this and show its answer when it
-## arrives (WorldSync.assign_result); the ids are the same on every copy of the world.
-func _execute(action: Action, target) -> bool:
+## Orders the selected citizen to walk to a world position. Online the citizen lives on the server, so ask it to do this and
+## show its answer when it arrives (WorldSync.assign_result).
+func _execute_go_to(world_pos: Vector3) -> bool:
 	if not Globals.online_client:
-		return PolicyEngine.execute(action, selected_citizen, target)
+		return PolicyEngine.execute(Action.new_go_to_position(), selected_citizen, world_pos)
 	var world_sync = Globals.world_sync
 	if not world_sync.assign_result.is_connected(_on_assign_result):
 		world_sync.assign_result.connect(_on_assign_result)
-	var target_id: String = target.id if target is BuildingInstance else str(target)
-	world_sync.req_assign(action.kind, selected_citizen.data.id, target_id)
+	world_sync.req_go_to(selected_citizen.data.id, world_pos)
 	return true # optimistic; the server's real answer follows
 
 func _on_assign_result(ok: bool, reason: String) -> void:
@@ -149,49 +153,6 @@ func _after_assign(ok: bool) -> void:
 	elif not Globals.online_client:
 		_deselect()
 
-## Resolves a world-space hit position to a placed structure or construction site id
-func _try_assign_at_world_position(world_pos: Vector3) -> bool:
-	if builder == null:
-		return false
-	
-	var assigned := false
-	# Construction site: assign selected citizen as a builder
-	var site_id = builder.get_nearest_construction_site(world_pos)
-	if site_id != builder.NO_ID and Builder.flat_distance(builder.construction_sites[site_id].position, world_pos) <= Builder.PICK_RADIUS:
-		assigned = _execute(Action.new_assign_build_task(), site_id)
-		_flash_assign_hint(assigned)
-		_after_assign(assigned)
-		return true
-	
-	# Gatherable structure (tree): assign selected citizen to gather it
-	var id = builder.get_structure_at_point(world_pos, Builder.PICK_RADIUS)
-	if id != builder.NO_ID:
-		var structure_index = builder.get_structure_index(id)
-		if structure_index >= 0 and structure_index < builder.structures.size() and builder.structures[structure_index].gatherable:
-			assigned = _execute(Action.new_assign_gather(), id)
-			_flash_assign_hint(assigned)
-			_after_assign(assigned)
-			return true
-	
-	# Building (house/workplace): assign housing or job.
-	if id == builder.NO_ID or not builder.buildings.has(id):
-		return false
-	
-	var instance: BuildingInstance = builder.buildings[id]
-	var structure: Structure = builder.structures[instance.structure_index]
-	
-	assigned = false
-	if structure.type == Structure.Type.HOUSE or structure.type == Structure.Type.SHOP:
-		assigned = _execute(Action.new_assign_housing(), instance)
-	elif structure.type == Structure.Type.WORKPLACE:
-		assigned = _execute(Action.new_assign_job(), instance)
-	else:
-		return false
-	
-	_flash_assign_hint(assigned)
-	_after_assign(assigned)
-	return true
-
 ## `reason` is why the Policy Engine refused (offline: read straight from it; online: sent back by the server)
 func _flash_assign_hint(success: bool, reason: String = PolicyEngine.last_failure) -> void:
 	assign_hint_label.visible = true
@@ -208,10 +169,10 @@ func _select(citizen: Node3D) -> void:
 	selected_citizen = citizen
 	_set_plate(citizen, true) # the selected citizen keeps their nameplate even when the mouse moves away
 	panel.visible = true
+	details_panel.visible = _details_open
 	ring.visible = true
 	assign_hint_label.visible = false
 	_refresh_panel()
-	_refresh_outlines()
 
 func _hide_selected_plate() -> void:
 	if selected_citizen != null and is_instance_valid(selected_citizen) and selected_citizen != _plate_hover:
@@ -221,8 +182,8 @@ func _deselect() -> void:
 	_hide_selected_plate()
 	selected_citizen = null
 	panel.visible = false
+	details_panel.visible = false
 	ring.visible = false
-	_refresh_outlines()
 
 ## The citizen under the mouse: whatever the physics ray hits first. If that is a citizen it is picked; if it is a tree,
 ## log or building it blocks the click. The on-screen click assist (a moving citizen is easy to miss by a few pixels)
@@ -274,7 +235,7 @@ func _set_plate(citizen: Node3D, shown: bool) -> void:
 func _update_hover() -> void:
 	var target: Node3D = null
 	var player := Globals.player
-	if player != null and (builder == null or not builder.interact_mode):
+	if player != null and (builder == null or not builder.build_mode):
 		var candidate := _citizen_under_mouse()
 		if candidate != null and candidate != selected_citizen \
 				and Builder.flat_distance(candidate.global_position, player.global_position) <= Builder.PLAYER_WORK_REACH:
@@ -296,71 +257,19 @@ func _set_hover(target: Node3D) -> void:
 		mesh.material_overlay = outline_material
 		_hover_meshes.append(mesh)
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	_update_hover()
 	_update_nameplates()
-	_outline_timer -= delta
-	if _outline_timer <= 0.0 and selected_citizen != null:
-		_outline_timer = OUTLINE_REFRESH_INTERVAL
-		_refresh_outlines()
 	if selected_citizen and is_instance_valid(selected_citizen):
 		_refresh_panel()
 		_update_ring_position()
-		_update_panel_position()
 	elif selected_citizen:
 		# Citizen was freed (e.g. removed from the world) while selected
 		_deselect()
 
-## Yellow outline on everything the selected citizen can be sent to (trees, loose logs). Cleared on deselect.
-func _refresh_outlines() -> void:
-	var wanted: Array[MeshInstance3D] = []
-	var player := Globals.player
-	var active: bool = outline_material != null and player != null and selected_citizen != null \
-			and is_instance_valid(selected_citizen)
-	if active:
-		var targets: Array = get_tree().get_nodes_in_group("gatherable")
-		for prop in get_tree().get_nodes_in_group("resource_prop"):
-			if not prop.collected:
-				targets.append(prop)
-		for target in targets:
-			if Builder.flat_distance(target.global_position, player.global_position) > Builder.PLAYER_WORK_REACH:
-				continue # out of the player's reach, so not offered
-			for node in target.find_children("*", "MeshInstance3D", true, false):
-				wanted.append(node as MeshInstance3D)
-	for mesh in _outlined:
-		if is_instance_valid(mesh) and not wanted.has(mesh):
-			mesh.material_overlay = null
-	for mesh in wanted:
-		if mesh.material_overlay != outline_material:
-			mesh.material_overlay = outline_material
-	_outlined = wanted
-
 func _update_ring_position() -> void:
 	# Flat ring sitting just above the ground at the citizen's feet
 	ring.global_position = selected_citizen.global_position + Vector3(0, 0.05, 0)
-
-func _update_panel_position() -> void:
-	if view_camera == null:
-		return
-	
-	var screen_pos = view_camera.unproject_position(selected_citizen.global_position)
-	
-	# Don't show the panel if the citizen is behind the camera
-	var cam_to_citizen = selected_citizen.global_position - view_camera.global_position
-	if view_camera.global_transform.basis.z.dot(cam_to_citizen) > 0:
-		panel.visible = false
-		return
-	panel.visible = true
-	
-	var target_pos = screen_pos + panel_offset
-	
-	# Clamp so the panel stays fully on-screen even if the citizen wanders near a viewport edge
-	var panel_size = panel.size if panel.size.length_squared() > 1.0 else panel.custom_minimum_size
-	var viewport_size = get_viewport().get_visible_rect().size
-	target_pos.x = clamp(target_pos.x, 0, viewport_size.x - panel_size.x)
-	target_pos.y = clamp(target_pos.y, 0, viewport_size.y - panel_size.y)
-	
-	panel.position = target_pos
 
 func _refresh_panel() -> void:
 	if selected_citizen == null or not is_instance_valid(selected_citizen):
@@ -370,40 +279,57 @@ func _refresh_panel() -> void:
 	if d == null:
 		return
 	
-	name_label.text = d.citizen_name if d.citizen_name != "" else "Unnamed citizen"
-	id_label.text = "Citizen ID: " + d.id if d.id != "" else "No ID"
+	var citizen_name: String = d.citizen_name if d.citizen_name != "" else "Unnamed citizen"
+	var job_text: String = d.job if d.job != "" else "Unemployed"
+	var doing := _activity(selected_citizen)
 	
-	var job_text = d.job if d.job != "" else "Unemployed"
-
+	# Slim docked card: just what you need while assigning (health / hunger / energy are on the nameplate)
+	name_label.text = citizen_name
 	stats_label.clear()
-	stats_label.append_text("[b]Age:[/b] %d\n" % d.age)
-	stats_label.append_text("[b]Job:[/b] %s" % job_text)
-
-	_begin_bars()
-	_set_bar("Happiness", d.happiness, 100.0) # health and hunger/energy are on the citizen's nameplate now
-	_end_bars()
-
-	hostile_label.visible = selected_citizen.has_method("get") and "is_chasing_player" in selected_citizen and selected_citizen.is_chasing_player
+	stats_label.append_text("[b]Job:[/b] %s\n[b]Doing:[/b] %s" % [job_text, doing])
+	_set_bar(bars_box, "Happiness", d.happiness, 100.0)
+	
+	hostile_label.visible = "is_chasing_player" in selected_citizen and selected_citizen.is_chasing_player
 	hostile_label.text = "Hostile -- chasing player!"
+	
+	# In-depth panel (only costs anything while it is open)
+	if not details_panel.visible:
+		return
+	details_name_label.text = citizen_name
+	details_stats_label.clear()
+	details_stats_label.append_text("[b]Citizen ID:[/b] %s\n[b]Age:[/b] %d\n[b]Job:[/b] %s\n[b]Doing:[/b] %s\n[b]Job satisfaction:[/b] %d%%\n[b]Housing satisfaction:[/b] %d%%" \
+			% [d.id if d.id != "" else "-", d.age, job_text, doing, int(d.job_satisfaction), int(d.housing_satisfaction)])
+	var puppet: bool = selected_citizen.get("is_puppet") == true # online citizens carry their stats in net_* fields
+	_set_bar(details_bars, "Health", selected_citizen.net_health if puppet else selected_citizen.health, 100.0)
+	_set_bar(details_bars, "Hunger", selected_citizen.net_hunger if puppet else selected_citizen.hunger, 100.0)
+	_set_bar(details_bars, "Energy", selected_citizen.net_energy if puppet else selected_citizen.energy, 100.0)
+	_set_bar(details_bars, "Happiness", d.happiness, 100.0)
+	_set_bar(details_bars, "Approval", d.approval, 100.0)
+
+## What the citizen is doing right now, for the card and the details panel (online copies don't have these flags)
+func _activity(c: Node3D) -> String:
+	if c.get("is_puppet") == true:
+		return "-"
+	if c.get("is_chasing_player") == true:
+		return "Chasing the player"
+	if c.get("is_resting") == true:
+		return "Resting"
+	if c.get("is_building") == true:
+		return "Building"
+	if c.get("is_gathering") == true:
+		return "Gathering"
+	if c.get("is_pushing") == true:
+		return "Hauling"
+	return "Idle"
 
 # Stat bars are real ProgressBar controls, not text (the game font has no block-character glyphs,
-# and a web export has no system font to fall back on). Each row is a node under `bars_box`,
+# and a web export has no system font to fall back on). Each row is a node under `box`,
 # named after its stat, with children Name / Bar / Value -- see main.tscn.
-var _bars_used: Array[String] = []
-
-func _begin_bars() -> void:
-	_bars_used.clear()
-
-func _end_bars() -> void:
-	for row in bars_box.get_children():
-		row.visible = _bars_used.has(row.name)
-
-func _set_bar(stat: String, value: float, max_value: float) -> void:
-	var row := bars_box.get_node_or_null(NodePath(stat))
+func _set_bar(box: Control, stat: String, value: float, max_value: float) -> void:
+	var row := box.get_node_or_null(NodePath(stat))
 	if row == null:
-		push_warning("CitizenSelector: no row named '%s' under bars_box -- add one in main.tscn." % stat)
+		push_warning("CitizenSelector: no row named '%s' under %s -- add one in main.tscn." % [stat, box.name])
 		return
-	_bars_used.append(stat)
 	var bar: ProgressBar = row.get_node("Bar")
 	bar.max_value = maxf(max_value, 1.0)
 	bar.value = clampf(value, 0.0, bar.max_value)
@@ -411,4 +337,8 @@ func _set_bar(stat: String, value: float, max_value: float) -> void:
 	row.get_node("Value").text = "%d%%" % pct
 	var fill := bar.get_theme_stylebox("fill") as StyleBoxFlat
 	if fill != null:
+		if not bar.has_meta("own_fill"): # rows may share one stylebox resource; give each bar its own so colours don't bleed across bars
+			fill = fill.duplicate()
+			bar.add_theme_stylebox_override("fill", fill)
+			bar.set_meta("own_fill", true)
 		fill.bg_color = Color(0.37, 0.83, 0.37) if pct > 60 else (Color(0.88, 0.78, 0.29) if pct > 30 else Color(0.88, 0.37, 0.37))

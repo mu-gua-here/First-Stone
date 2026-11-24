@@ -9,20 +9,21 @@ extends RefCounted
 ## structures/zone-tiles.tres. Zones are looked up by NAME (INFO's "item"), never by MeshLibrary index or enum number,
 ## so reordering either can't scramble a saved map.
 
-enum Type { NONE, LOG_STOCKPILE, FOOD_STOCKPILE, GATHERING, BUILD_AREA }
+enum Type { NONE, LOG_STOCKPILE, FOOD_STOCKPILE, GATHERING, BUILD_AREA, RESTRICTED }
 
 ## "blocks_building": nothing can be built on these tiles. "enforced": the game already acts on this zone
-## (GATHERING and BUILD_AREA can be painted and saved, but nothing reads them yet).
+## (what citizens may do inside GATHERING, BUILD_AREA and RESTRICTED is decided by policies, see PolicyEngine.is_permitted).
 const INFO := {
 	Type.LOG_STOCKPILE: {"item": "log_stockpile", "label": "Log stockpile", "color": Color(0.92, 0.55, 0.2), "blocks_building": true, "enforced": true},
 	Type.FOOD_STOCKPILE: {"item": "food_stockpile", "label": "Food stockpile", "color": Color(0.45, 0.85, 0.35), "blocks_building": true, "enforced": true},
-	Type.GATHERING: {"item": "gathering", "label": "Gathering area", "color": Color(0.3, 0.6, 0.95), "blocks_building": false, "enforced": false},
-	Type.BUILD_AREA: {"item": "build_area", "label": "Build area", "color": Color(0.95, 0.88, 0.4), "blocks_building": false, "enforced": false},
+	Type.GATHERING: {"item": "gathering", "label": "Gathering area", "color": Color(0.3, 0.6, 0.95), "blocks_building": false, "enforced": true},
+	Type.BUILD_AREA: {"item": "build_area", "label": "Build area", "color": Color(0.95, 0.88, 0.4), "blocks_building": false, "enforced": true},
+	Type.RESTRICTED: {"item": "restricted", "label": "Restricted area", "color": Color(0.85, 0.25, 0.25), "blocks_building": false, "enforced": true},
 	Type.NONE: {"item": "", "label": "Clear zone", "color": Color(0.85, 0.85, 0.85), "blocks_building": false, "enforced": true},
 }
 
 ## The paint brushes in the order of the number keys (1, 2, 3...) in zone mode
-const BRUSHES := [Type.LOG_STOCKPILE, Type.FOOD_STOCKPILE, Type.GATHERING, Type.BUILD_AREA, Type.NONE]
+const BRUSHES := [Type.LOG_STOCKPILE, Type.FOOD_STOCKPILE, Type.GATHERING, Type.BUILD_AREA, Type.RESTRICTED, Type.NONE]
 
 signal cell_changed(cell: Vector3i, old_type: int, new_type: int)
 

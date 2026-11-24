@@ -73,6 +73,8 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if OS.is_debug_build() and event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_F6:
 		_set_active(not _mesh_instance.visible)
@@ -228,12 +230,6 @@ func _update_hud(camera: Camera3D, focus: Vector3) -> void:
 	var text := "WATER DEBUG (F6)\n"
 	var surface_at_focus := _fluid.get_surface_height(focus)
 	# describe_source() only exists on the new FluidArea3D; the legacy one just reads the Ocean terrain
-	var source := "legacy Ocean terrain manager"
-	if _fluid.has_method("describe_source"):
-		source = _fluid.call("describe_source")
-	elif _fluid.get("ocean_terrain_manager") == null:
-		source = "legacy: manager NOT resolved -> flat box height"
-	text += "water source: %s\n" % source
 	text += "surface at player XZ: %.3f   (player y=%.3f)\n" % [surface_at_focus, focus.y]
 	if camera:
 		var cam := camera.global_position

@@ -66,7 +66,8 @@ signal died
 
 @export_category("Energy Usage")
 ## Energy: how physically rested the body is (100 = fresh, 0 = worn out). Effort spends it (walking, swimming, jumping,
-## gathering, building) and it only comes back by resting in a shelter (see is_resting). Assign to it directly -- the
+## gathering, building) and it comes back slowly while doing nothing (idle_recharge) and much faster while asleep
+## (rest_recharge, see is_resting). Assign to it directly -- the
 ## setter clamps and emits energy_changed.
 @export_range(0.0, 100.0) var energy: float = 100.0:
 	set(value):
@@ -83,8 +84,18 @@ signal died
 @export var jump_energy := 0.3
 ## Hunger burned per second just by being alive
 @export var metabolism := 0.01
-## Energy regained per second while is_resting
+## Energy regained per second while asleep in a shelter (is_resting)
 @export var rest_recharge := 0.3
+## Energy regained per second while awake but inactive (standing still, not working). Much slower than sleeping, and still
+## outpaces the cost of a slow stroll, so a citizen who pauses between jobs picks a little energy back up
+@export var idle_recharge := 0.05
+## Sleeping out in the open (no shelter nearby) recharges at this fraction of rest_recharge
+@export_range(0.0, 1.0) var outdoor_sleep_mult := 0.5
+## Energy at or below which a carrier passes out on the spot (innate: citizens in citizen.gd, the Player in player.gd) and
+## the energy at which it wakes again. Collapsing is sleeping out in the open, so it recharges at rest_recharge * outdoor_sleep_mult
+## (or the full rate if a shelter happens to be right there).
+@export var collapse_below := 10.0
+@export var collapse_wake := 40.0
 ## Below this much hunger the body starts to hurt (hunger_dmg), and below this much energy too (exhaustion_dmg)
 @export var starving_below := 30.0
 @export var exhausted_below := 30.0
@@ -94,9 +105,21 @@ signal died
 @export var slow_below_hunger := 50.0
 @export var slow_below_energy := 50.0
 
-## True while lying down in a shelter: the Citizen at night, the Player standing still beside one. Energy only recharges
-## while this is true, so with no shelter nobody ever recovers.
+## True while asleep: the Citizen in a shelter at night, the Player after pressing the sleep key (anywhere, though a shelter
+## recharges faster, see sleeping_in_shelter). Asleep recharges energy at rest_recharge instead of idle_recharge.
 var is_resting := false
+
+## Whether the sleeping spot counts as a shelter (full rest_recharge) or the open (rest_recharge * outdoor_sleep_mult).
+## Citizens only sleep in shelters; the Player sets this each frame while asleep.
+var sleeping_in_shelter := true
+
+## True while passed out from exhaustion (energy hit collapse_below): asleep wherever they fell, and for the Player unable
+## to move until energy is back above collapse_wake.
+var collapsed := false
+
+## True while the carrier is walking, swimming or working. Set by Player / Citizen each frame before _tick_vitals();
+## while false (and not asleep) energy slowly recharges at idle_recharge.
+var is_active := false
 
 ## True from the moment health hits 0 until (for the player only) the respawn.
 var is_dead := false
@@ -172,14 +195,16 @@ func _on_death() -> void:
 
 # --- Vitals (shared by the Player and Citizens) ---------------------------------
 #   hunger: food. Burns with time, healing costs some, eating refills it, starving hurts.
-#   energy: physical tiredness. Effort spends it, only resting in a shelter refills it, exhaustion hurts.
+#   energy: physical tiredness. Effort spends it, doing nothing refills it slowly, sleeping refills it fast, exhaustion hurts.
 
 ## The body's slow processes, called once per physics frame by Player and Citizen. Spending energy on effort is NOT done
 ## here: whatever does the work (walking, gathering, building, jumping) pays for it where it happens.
 func _tick_vitals(delta: float) -> void:
 	hunger -= metabolism * delta
 	if is_resting:
-		energy += rest_recharge * delta
+		energy += rest_recharge * (1.0 if sleeping_in_shelter else outdoor_sleep_mult) * delta
+	elif not is_active:
+		energy += idle_recharge * delta
 	# The body only mends itself when it is fed and not worn out; mending costs hunger
 	if health < max_health and hunger > starving_below and energy > exhausted_below:
 		health += heal_rate * delta

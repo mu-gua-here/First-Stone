@@ -11,10 +11,9 @@ Major things that have yet to be added to the game
 
 ### HIGH PRIORITY
 
-1. Policy editor to set rules for citizens
-2. Punish player for not assigning citizens a home (e.g.: happiness decreases)
-3. More structures (straw shelter, gov buildings, storage facilities, research centres etc.)
-4. More tile types with unique attributes (e.g. farmable land)
+1. More structures (straw shelter, gov buildings, storage facilities, research centres etc.)
+2. More tile types with unique attributes (e.g. farmable land)
+3. Make citizens think for themselves when deciding whether to follow a policy or not
 
 ### MID PRIORITY
 
@@ -43,7 +42,7 @@ Major unexpected errors when completing certain tasks
 
 ### LOW PRIORITY
 
-1. 
+1.
 
 ## ISSUES
 
@@ -67,15 +66,14 @@ Quality-of-life additions, gameplay, minor issues and aesthetic improvements
 
 ### HIGH PRIORITY
 
-1. ADD DIFFERENT GRAPHICS MODES for mobile vs desktop (look at Taipei Rush)
-2. UI selection panel looks trash
+1. UI selection panel still looks trash
+2. Stylise the sun/moon, water, sky etc
 
 ### MID PRIORITY
 
 1. Batch trees together for better performance blud
-2. Automatic zoom in & out restricts player viewing freedom, manual camera should take precedence
-3. Toggleable visual indicator to find residents and npcs
-4. Key binds: esc is game menu, tab is inventory or a different menu, pointer-lock is ctrl
+2. Toggleable visual indicator to find residents and npcs
+3. Add low poly details to sides of base tiles
 
 ### LOW PRIORITY
 

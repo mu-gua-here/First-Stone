@@ -1,0 +1,55 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/policy_clause_row.gd" id="1_row"]
+
+[node name="PolicyClauseRow" type="HBoxContainer"]
+theme_override_constants/separation = 8
+script = ExtResource("1_row")
+
+[node name="NotToggle" type="Button" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(64, 0)
+layout_mode = 2
+tooltip_text = "Click to flip. YES: the condition has to hold. NOT: it must not hold."
+theme_override_font_sizes/font_size = 18
+toggle_mode = true
+text = "YES"
+
+[node name="FieldOption" type="OptionButton" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(210, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+
+[node name="OpOption" type="OptionButton" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+
+[node name="ValueSpin" type="SpinBox" parent="."]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+
+[node name="ValueChoice" type="OptionButton" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(130, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+
+[node name="ValueText" type="LineEdit" parent="."]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(130, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+placeholder_text = "(none)"
+
+[node name="RemoveButton" type="Button" parent="."]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Remove this condition"
+theme_override_font_sizes/font_size = 20
+text = "X"

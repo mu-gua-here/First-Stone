@@ -5,12 +5,14 @@ extends Carrier
 @export var nameplate: Nameplate
 ## The capsule you are drawn as; Network tints it with your player colour
 @export var body_mesh: MeshInstance3D
-## "[E] Grab" prompt shown near small pick-up items (fruit); a Label in player.tscn
-@export var grab_hint: Label
-const GRAB_REACH := 1.8
-const BUSH_PICK_REACH := 2.6 # flat distance to a bush's centre from which E picks its fruit (the bush itself is ~1.4 wide)
+## "[E] Grab" prompt box shown near small pick-up items (fruit); a PanelContainer in player.tscn (its Label child holds the text)
+@export var grab_hint: Control
+@export var grab_hint_label: Label
+const GRAB_REACH := 6.0
+const PROP_PICK_RADIUS := 0.5
 var _held_props: Array = [] # ResourceProps carried overhead, oldest first (up to ResourceProp.MAX_CARRY)
 var _held_prop_names: Array = [] # online client: names of the props the server let us pick up (some still optimistic)
+var _prop_pick_shape: SphereShape3D
 
 func set_body_color(color: Color) -> void:
 	var base := body_mesh.get_active_material(0)
@@ -57,6 +59,8 @@ const KNOCKBACK_FRICTION = 6.0  # how fast knockback decays per second
 func _ready():
 	spawn_point = global_position
 	add_to_group("player")
+	_prop_pick_shape = SphereShape3D.new()
+	_prop_pick_shape.radius = PROP_PICK_RADIUS
 	if view_node == null:
 		view_node = get_tree().get_first_node_in_group("view")
 		if view_node == null:
@@ -65,13 +69,30 @@ func _ready():
 	_carrier_ready() # sets `builder` (see carrier.gd)
 
 func _physics_process(delta: float) -> void:
+	if Globals.is_gameplay_input_blocked():
+		cancel_gameplay_input()
+		velocity = Vector3.ZERO
+		return
+
 	_update_grab()
+	if is_resting:
+		_set_grab_hint("You passed out from exhaustion..." if collapsed else "Sleeping... move or jump to wake up") # (a sleeping player is not carrying anything the hint could be about)
 	
 	if not dev_mode:
 		_apply_gravity(delta) # see carrier.gd -- gradual sink in water, normal gravity on land
 	
 	# Cached: is_in_fluid() samples the water height. Dev mode is a free-fly cam, so water doesn't touch it.
 	var in_fluid := is_in_fluid() and not dev_mode
+	
+	# Passing out is innate (not a policy): at collapse_below energy you drop where you stand and stay out cold until energy is
+	# back above collapse_wake. Out in the open recharges at half rate, beside a shelter at full rate (see below).
+	if collapsed and (energy >= collapse_wake or dev_mode):
+		collapsed = false
+		is_resting = false
+	elif not collapsed and not dev_mode and not in_fluid and energy <= collapse_below:
+		collapsed = true
+		is_resting = true
+		_stop_work()
 	
 	# (gravity / sinking is applied at the top by _apply_gravity())
 	
@@ -83,7 +104,7 @@ func _physics_process(delta: float) -> void:
 	
 	# Jump (solid ground only -- swimming is handled by the swim_up/swim_down axis below)
 	var just_jumped := false
-	if energy > 0.0:
+	if energy > 0.0 and not collapsed:
 		if Input.is_action_just_pressed("player_jump") and not in_fluid and (is_on_floor() or bounce_active):
 			velocity.y = JUMP_HEIGHT * vitality_mult * 0.5 * (2 - int(_holding_log()))
 			energy -= jump_energy
@@ -103,8 +124,8 @@ func _physics_process(delta: float) -> void:
 			_jumping = false
 	
 	# Movement input, rotated to follow the camera
-	var input_dir := Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
-	var up_down := Input.get_axis("descend", "ascend")
+	var input_dir := Vector2.ZERO if collapsed else Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
+	var up_down := 0.0 if collapsed else Input.get_axis("descend", "ascend")
 	var move_vec := Vector3(input_dir.x, up_down if in_fluid or dev_mode else 0.0, input_dir.y)
 	var direction := move_vec.rotated(Vector3.UP, view_node.rotation.y if view_node else 0.0).normalized()
 	
@@ -129,8 +150,13 @@ func _physics_process(delta: float) -> void:
 		if wanted.length() > 0.0:
 			_spend_travel_energy(delta, in_fluid) # walking tires you out, swimming more so
 	
-	# Standing still beside a shelter is resting: that (and only that) is how energy comes back
-	is_resting = builder != null and not dev_mode and input_dir == Vector2.ZERO and builder.is_near_shelter(global_position)
+	# Asleep (toggled with SLEEP_KEY, see _toggle_sleep): moving, jumping, swimming, working or dev flight wakes you, and so does
+	# a full recharge. Sleeping beside a shelter recharges energy faster than out in the open (Carrier.sleeping_in_shelter).
+	if is_resting and not collapsed and (input_dir != Vector2.ZERO or Input.is_action_just_pressed("player_jump") or in_fluid or dev_mode or is_working() or energy >= max_energy):
+		is_resting = false
+	if is_resting:
+		sleeping_in_shelter = builder != null and builder.is_near_shelter(global_position)
+	is_active = input_dir != Vector2.ZERO or in_fluid or is_working() # awake and doing nothing recharges energy slowly (Carrier.idle_recharge)
 	_tick_vitals(delta) # hunger burns, healing costs hunger, starving / exhaustion hurt, resting recharges energy (carrier.gd)
 	
 	if in_fluid:
@@ -201,6 +227,8 @@ func take_damage(amount: float, source_position: Vector3 = global_position, knoc
 	if invuln_timer > 0.0:
 		return
 	invuln_timer = invuln_time
+	if not collapsed:
+		is_resting = false # being hit wakes you up (unless you are out cold from exhaustion)
 	
 	# Push the player directly away from whatever hit them
 	var push_dir := global_position - source_position
@@ -241,24 +269,15 @@ func _update_grab() -> void:
 		var top := _held_props.pop_back() as ResourceProp
 		top.release(Vector3(velocity.x, 0.0, velocity.z))
 	var full := _held_props.size() >= ResourceProp.MAX_CARRY or _holding_log() # no room for fruit (a log fills your arms)
-	var nearest: ResourceProp = _nearest_grabbable(false) # null when the hands have no room for anything nearby
-	var bush: Gatherable = null if full else builder.nearest_pickable_bush(global_position, BUSH_PICK_REACH)
+	_update_pick_hover(false, full) # outlines the prop / bush under the cursor; a left click grabs it (_try_click_grab)
 	var drop_hint := ("   [Q] Drop" + ("   [F] Eat" if _holding_food() else "")) if not _held_props.is_empty() else ""
-	if nearest != null:
-		if nearest.is_log():
-			_set_grab_hint("[E] Grab log%s" % drop_hint)
+	if _hover_prop != null:
+		if _hover_prop.is_log():
+			_set_grab_hint("Click to grab log%s" % drop_hint)
 		else:
-			_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
-		if Input.is_action_just_pressed("grab"):
-			nearest.grab()
-			_held_props.append(nearest)
-	elif bush != null:
-		_set_grab_hint("[E] Pick fruit (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
-		if Input.is_action_just_pressed("grab"):
-			var fruit: ResourceProp = builder.pick_bush_fruit(bush)
-			if fruit != null:
-				fruit.grab()
-				_held_props.append(fruit)
+			_set_grab_hint("Click to grab (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
+	elif _hover_bush != null:
+		_set_grab_hint("Click to pick fruit (%d/%d)%s" % [_held_props.size(), ResourceProp.MAX_CARRY, drop_hint])
 	elif not _held_props.is_empty():
 		if _holding_log():
 			_set_grab_hint("Carrying a log - [Q] Drop")
@@ -315,30 +334,122 @@ func _carried_props(is_client: bool) -> Array:
 func _carry_speed_mult() -> float:
 	return ResourceProp.carry_speed_mult(_carried_props(Globals.online_client))
 
-## The closest prop within GRAB_REACH that can be picked up and that the hands have room for: fruit, and logs (a log needs free arms,
-## see ResourceProp.has_room_for). Logs lying on the stockpile count only once settled on it.
+const PROP_PICK_RAY_LENGTH := 60.0
+var _hover_prop: ResourceProp = null # the grabbable prop under the cursor (null: none)
+var _hover_bush: Gatherable = null # the bush under the cursor whose fruit can be picked (null: none)
+var _hover_target: Node3D = null
+var _hover_meshes: Array[MeshInstance3D] = []
+
+## Click-to-grab only works in the plain play mode: not while building / demolishing, and not while a citizen is selected
+## (that click assigns the citizen a task, see CitizenSelector)
+func _can_pick_by_click() -> bool:
+	if builder == null or dev_mode or is_dead:
+		return false
+	if builder.build_mode:
+		return false
+	var selector = get_tree().get_first_node_in_group("citizen_selector")
+	return selector == null or selector.selected_citizen == null
+
+## The prop under the cursor (or the crosshair) that can be picked up and that the hands have room for: fruit, and logs (a log
+## needs free arms, see ResourceProp.has_room_for). Must be within GRAB_REACH of the player. A nearer object under the cursor
+## hides what is behind it (a swept sphere). Logs lying on the stockpile count only once settled on it.
 ## On a client every prop is a puppet of the server's, which has the final say (can_be_grabbed) anyway.
-func _nearest_grabbable(is_client: bool) -> ResourceProp:
-	var nearest: ResourceProp = null
-	var best := GRAB_REACH * GRAB_REACH
-	var carried := _carried_props(is_client)
-	for node in get_tree().get_nodes_in_group("resource_prop"):
-		var prop := node as ResourceProp
-		if prop == null or prop.collected:
-			continue
-		if not is_client and (prop.held or prop.is_puppet):
-			continue
-		if is_client and _held_prop_names.has(String(prop.name)):
-			continue # already on our stack
-		if not ResourceProp.has_room_for(carried, prop):
-			continue
-		if prop.is_log() and prop.in_pile and not prop.has_arrived():
-			continue # still flying onto the pile
-		var d := global_position.distance_to(prop.global_position)
-		if d < best:
-			best = d
-			nearest = prop
-	return nearest
+func _grabbable_prop_at(screen_pos: Vector2, is_client: bool) -> ResourceProp:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return null
+	var from := camera.project_ray_origin(screen_pos)
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _prop_pick_shape
+	query.transform = Transform3D(Basis.IDENTITY, from)
+	query.motion = camera.project_ray_normal(screen_pos) * PROP_PICK_RAY_LENGTH
+	query.exclude = [get_rid()] # the camera looks past the player's own body
+	query.collide_with_bodies = true
+	var space := get_world_3d().direct_space_state
+	var motion := space.cast_motion(query)
+	if motion.size() < 2 or motion[0] >= 1.0:
+		return null
+	query.transform.origin += query.motion * motion[1]
+	var hit := space.get_rest_info(query)
+	if hit.is_empty():
+		return null
+	var prop := instance_from_id(int(hit.get("collider_id", 0))) as ResourceProp
+	if prop == null or prop.collected:
+		return null
+	if not prop.can_be_grabbed():
+		return null
+	if not is_client and (prop.held or prop.is_puppet):
+		return null
+	if is_client and _held_prop_names.has(String(prop.name)):
+		return null # already on our stack
+	if not ResourceProp.has_room_for(_carried_props(is_client), prop):
+		return null
+	if prop.is_log() and prop.in_pile and not prop.has_arrived():
+		return null # still flying onto the pile
+	if global_position.distance_to(prop.global_position) > GRAB_REACH:
+		return null
+	return prop
+
+## Finds what the cursor is over (a grabbable prop, else a bush with fruit within reach) and outlines it
+func _update_pick_hover(is_client: bool, full: bool) -> void:
+	_hover_prop = null
+	_hover_bush = null
+	if _can_pick_by_click():
+		var screen_pos := Globals.aim_position()
+		_hover_prop = _grabbable_prop_at(screen_pos, is_client)
+		if _hover_prop == null and not full and not is_client:
+			_hover_bush = builder.pick_bush_at(screen_pos, global_position, GRAB_REACH)
+	var target: Node3D = _hover_prop
+	if target == null:
+		target = _hover_bush
+	_set_hover_outline(target)
+
+func _set_hover_outline(target: Node3D) -> void:
+	if target == _hover_target:
+		return
+	for mesh in _hover_meshes:
+		if is_instance_valid(mesh):
+			mesh.material_overlay = null
+	_hover_meshes.clear()
+	_hover_target = target
+	var selector = get_tree().get_first_node_in_group("citizen_selector")
+	var outline: Material = selector.outline_material if selector != null else null # the same yellow outline the selector uses
+	if target == null or outline == null:
+		return
+	for node in target.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		mesh.material_overlay = outline
+		_hover_meshes.append(mesh)
+
+## A left click on the outlined prop / bush grabs it (what E used to do). Returns true if the click was used.
+func _try_click_grab(screen_pos: Vector2) -> bool:
+	if not _can_pick_by_click():
+		return false
+	var is_client := Globals.online_client
+	var prop := _grabbable_prop_at(screen_pos, is_client)
+	if prop != null:
+		if is_client:
+			var sync = Globals.world_sync
+			if sync == null:
+				return false
+			sync.req_prop_grab(String(prop.name), true)
+			_held_prop_names.append(String(prop.name)) # optimistic; _on_grab_result removes it if the server said no
+		else:
+			prop.grab()
+			_held_props.append(prop)
+		_set_hover_outline(null)
+		return true
+	if is_client or _held_props.size() >= ResourceProp.MAX_CARRY or _holding_log():
+		return false
+	var bush: Gatherable = builder.pick_bush_at(screen_pos, global_position, GRAB_REACH)
+	if bush == null:
+		return false
+	var fruit: ResourceProp = builder.pick_bush_fruit(bush)
+	if fruit == null:
+		return false
+	fruit.grab()
+	_held_props.append(fruit)
+	return true
 
 func _update_grab_online() -> void:
 	var sync = Globals.world_sync
@@ -352,18 +463,15 @@ func _update_grab_online() -> void:
 		if held == null or held.collected:
 			_held_prop_names.remove_at(i) # it was collected (or is gone)
 	var full := _held_prop_names.size() >= ResourceProp.MAX_CARRY or _holding_log()
-	var nearest: ResourceProp = _nearest_grabbable(true)
+	_update_pick_hover(true, full)
 	if Input.is_action_just_pressed("drop") and not _held_prop_names.is_empty():
 		sync.req_prop_grab(String(_held_prop_names.pop_back()), false)
 	var drop_hint := "   [Q] Drop" if not _held_prop_names.is_empty() else ""
-	if nearest != null:
-		if nearest.is_log():
-			_set_grab_hint("[E] Grab log%s" % drop_hint)
+	if _hover_prop != null:
+		if _hover_prop.is_log():
+			_set_grab_hint("Click to grab log%s" % drop_hint)
 		else:
-			_set_grab_hint("[E] Grab (%d/%d)%s" % [_held_prop_names.size(), ResourceProp.MAX_CARRY, drop_hint])
-		if Input.is_action_just_pressed("grab"):
-			sync.req_prop_grab(String(nearest.name), true)
-			_held_prop_names.append(String(nearest.name)) # optimistic; _on_grab_result removes it if the server said no
+			_set_grab_hint("Click to grab (%d/%d)%s" % [_held_prop_names.size(), ResourceProp.MAX_CARRY, drop_hint])
 	elif not _held_prop_names.is_empty():
 		if full:
 			_set_grab_hint("Hands full (%d/%d) - [Q] Drop" % [_held_prop_names.size(), ResourceProp.MAX_CARRY])
@@ -377,26 +485,49 @@ func _on_grab_result(prop_name: String, ok: bool) -> void:
 		_held_prop_names.erase(prop_name)
 
 func _set_grab_hint(text: String) -> void:
-	if grab_hint == null:
+	if grab_hint == null or grab_hint_label == null:
 		return
 	grab_hint.visible = text != ""
-	grab_hint.text = text
+	grab_hint_label.text = text
 
 func _unhandled_key_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked():
+		return
 	if event.keycode == KEY_F8 and not (event is InputEventKey and event.pressed and not event.echo):
 		dev_mode = not dev_mode
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == SLEEP_KEY:
+		_toggle_sleep()
+
+## Lie down / get up. Sleeping recharges energy much faster than standing around (and fastest beside a shelter), but only works
+## while you are standing on the ground and not already fully rested.
+const SLEEP_KEY := KEY_X # (Z is zone mode, C is descend)
+func _toggle_sleep() -> void:
+	if collapsed:
+		return # out cold: you wake when you are rested enough
+	if is_resting:
+		is_resting = false
+		return
+	if dev_mode or is_dead or is_in_fluid() or not is_on_floor() or energy >= max_energy:
+		return
+	_stop_work() # put down the axe
+	is_resting = true
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Globals.is_gameplay_input_blocked() or collapsed:
+		return
 	# Click-AND-HOLD to gather a resource OR help build a construction site --
 	# same gesture, branches on what's under the cursor (see _try_start_work).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
+			if _try_click_grab(Globals.aim_position()):
+				get_viewport().set_input_as_handled()
+				return
 			_try_start_work(Globals.aim_position())
 		else:
 			_stop_work()
 
 func _try_start_work(screen_pos: Vector2) -> void:
-	if builder == null or (builder.interact_mode and not builder.delete_mode):
+	if builder == null or (builder.build_mode and not builder.delete_mode):
 		return # building mode: left click places things
 	# A citizen is selected -- this click is for assigning them (see CitizenSelector)
 	var selector = get_tree().get_first_node_in_group("citizen_selector")
@@ -418,7 +549,7 @@ func _try_start_work(screen_pos: Vector2) -> void:
 	if hit.id == NO_ID:
 		return
 	
-	# In delete mode (Tab for interact mode, then Backspace) clicking a built structure (or a site) takes it apart. It takes
+	# In delete mode (B for build mode, then Command+B) clicking a built structure (or a site) takes it apart. It takes
 	# labour: see _update_demolishing and Builder.add_demolish_progress. Clicking anything else in delete mode does nothing.
 	if builder.delete_mode:
 		if builder.can_demolish(hit.id):
@@ -442,6 +573,9 @@ func _stop_work() -> void:
 	_stop_gathering()
 	_stop_building_task()
 	demolish_target_id = NO_ID
+
+func cancel_gameplay_input() -> void:
+	_stop_work()
 
 # True while a click-and-hold gather/build/demolish is active (the camera drag in view.gd checks this)
 func is_working() -> bool:
@@ -483,7 +617,7 @@ func _update_gathering(delta: float) -> void:
 		hunger += result.get("hunger_bonus", 0.0)
 		_stop_gathering()
 
-# Called every physics frame while the mouse button is held on a structure and Del is held too. The ring over
+# Called every physics frame while the mouse button is held on a structure in demolish mode. The ring over
 # the building (Builder.update_demolish_ring) fills as labour goes in; the structure only goes once it is full.
 func _update_demolishing(delta: float) -> void:
 	if demolish_target_id == NO_ID:

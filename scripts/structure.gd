@@ -51,7 +51,7 @@ enum JobTask { NONE, GATHER, BUILD, HAUL, FORAGE }
 @export var build_cost: Dictionary = {} # resource_type (String) -> amount required from the stockpile, drawn down as builders work the site
 @export var build_time: float = 10.0 # Total builder-seconds of labor needed to finish (see ConstructionSite.progress)
 @export var build_energy_required: float = 1.0 # Energy cost per second of active labor spent building this structure (player or citizen)
-@export var demolish_time: float = 4.0 # Seconds of the player's labour (hold Del + click and hold the structure) to take it apart
+@export var demolish_time: float = 4.0 # Seconds of the player's labour (enter with Command+B, then click and hold the structure) to take it apart
 
 @export_subgroup("Unlock")
 @export var unlock_requirements: Dictionary = {} # resource_type (String) -> cumulative lifetime amount gathered (DataMap.lifetime_gathered, not current stockpile) needed before this is buildable. Empty = unlocked from the start.

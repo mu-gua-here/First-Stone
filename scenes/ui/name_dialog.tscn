@@ -33,19 +33,19 @@ theme_override_constants/margin_bottom = 24
 
 [node name="VBox" type="VBoxContainer" parent="Center/Panel/Margin" unique_id=1359600255]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme = ExtResource("1_bydm4")
 
 [node name="Title" type="Label" parent="Center/Panel/Margin/VBox" unique_id=1713444080]
 layout_mode = 2
 theme = ExtResource("1_bydm4")
-theme_override_font_sizes/font_size = 32
+theme_override_font_sizes/font_size = 24
 text = "Choose your name"
 horizontal_alignment = 1
 
 [node name="NameEdit" type="LineEdit" parent="Center/Panel/Margin/VBox" unique_id=852437124]
 custom_minimum_size = Vector2(260, 0)
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
+theme_override_font_sizes/font_size = 12
 placeholder_text = "Your name"
 alignment = 1
 max_length = 16
@@ -54,10 +54,10 @@ max_length = 16
 layout_mode = 2
 theme = ExtResource("1_bydm4")
 theme_override_colors/font_color = Color(1, 0.45, 0.4, 1)
+theme_override_font_sizes/font_size = 10
 horizontal_alignment = 1
 
 [node name="ConfirmButton" type="Button" parent="Center/Panel/Margin/VBox" unique_id=35465050]
 layout_mode = 2
 theme = ExtResource("1_bydm4")
-theme_override_font_sizes/font_size = 24
 text = "Play"
